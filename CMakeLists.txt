@@ -96,14 +96,6 @@ elseif(APPLE)
         "-framework Security"
     )
 elseif(UNIX)
-    target_link_libraries(sdp-player-core PUBLIC
-        m
-        pthread
-        dl
-        z
-        bz2
-        lzma
-    )
     if(MINGW)
         target_link_options(sdp-player PRIVATE -mconsole)
     endif()

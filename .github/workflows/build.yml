@@ -83,7 +83,9 @@ jobs:
             libavcodec-dev \
             libavutil-dev \
             libswscale-dev \
-            libswresample-dev
+            libswresample-dev \
+            libbz2-dev \
+            liblzma-dev
 
       - name: Install macOS dependencies
         if: matrix.os-name == 'macos'
