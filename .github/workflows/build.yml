@@ -20,11 +20,11 @@ jobs:
           - os-name: windows
             arch: x64
             runner: windows-latest
-            triplet: x64-windows
+            triplet: x64-windows-static
           - os-name: windows
             arch: arm64
             runner: windows-11-arm
-            triplet: arm64-windows
+            triplet: arm64-windows-static
           - os-name: macos
             arch: arm64
             runner: macos-latest

@@ -12,12 +12,17 @@ find_package(PkgConfig REQUIRED)
 
 set(ENV{PKG_CONFIG_ARGN} "--static")
 
-pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
-pkg_check_modules(LIBAVFORMAT REQUIRED IMPORTED_TARGET libavformat)
-pkg_check_modules(LIBAVCODEC REQUIRED IMPORTED_TARGET libavcodec)
-pkg_check_modules(LIBAVUTIL REQUIRED IMPORTED_TARGET libavutil)
-pkg_check_modules(LIBSWSCALE REQUIRED IMPORTED_TARGET libswscale)
-pkg_check_modules(LIBSWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+if(NOT WIN32)
+    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    pkg_check_modules(LIBAVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+    pkg_check_modules(LIBAVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+    pkg_check_modules(LIBAVUTIL REQUIRED IMPORTED_TARGET libavutil)
+    pkg_check_modules(LIBSWSCALE REQUIRED IMPORTED_TARGET libswscale)
+    pkg_check_modules(LIBSWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+else()
+    find_package(SDL2 CONFIG REQUIRED)
+    find_package(FFmpeg CONFIG REQUIRED)
+endif()
 
 add_library(sdp-player-core
     src/player.c
@@ -39,14 +44,25 @@ target_include_directories(sdp-player-core PUBLIC
     ${LIBSWRESAMPLE_INCLUDE_DIRS}
 )
 
-target_link_libraries(sdp-player-core PUBLIC
-    PkgConfig::SDL2
-    PkgConfig::LIBAVFORMAT
-    PkgConfig::LIBAVCODEC
-    PkgConfig::LIBAVUTIL
-    PkgConfig::LIBSWSCALE
-    PkgConfig::LIBSWRESAMPLE
-)
+if(WIN32)
+    target_link_libraries(sdp-player-core PUBLIC
+        SDL2::SDL2-static
+        avformat
+        avcodec
+        avutil
+        swscale
+        swresample
+    )
+else()
+    target_link_libraries(sdp-player-core PUBLIC
+        PkgConfig::SDL2
+        PkgConfig::LIBAVFORMAT
+        PkgConfig::LIBAVCODEC
+        PkgConfig::LIBAVUTIL
+        PkgConfig::LIBSWSCALE
+        PkgConfig::LIBSWRESAMPLE
+    )
+endif()
 
 add_executable(sdp-player
     src/main.c
@@ -66,7 +82,6 @@ if(MSVC)
 elseif(WIN32)
     target_link_options(sdp-player PRIVATE -static -static-libgcc)
 elseif(UNIX AND NOT APPLE)
-    target_link_options(sdp-player PRIVATE -static)
 endif()
 
 if(WIN32)
