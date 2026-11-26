@@ -26,11 +26,8 @@ jobs:
             runner: windows-11-arm
             triplet: arm64-windows
           - os-name: macos
-            arch: x64
-            runner: macos-13
-          - os-name: macos
             arch: arm64
-            runner: macos-14
+            runner: macos-latest
           - os-name: linux
             arch: x64
             runner: ubuntu-latest
