@@ -34,6 +34,7 @@ cmake --build build
 
 ```sh
 ./build/sdp-sdl /path/to/source.sdp
+```
 
 To receive video only:
 
@@ -61,7 +62,6 @@ To write performance measurements to a specific CSV file:
 
 Without `--profile`, the app creates a timestamped
 `sdp-sdl-profile-YYYYMMDD-HHMMSS.csv` file in the current directory.
-```
 
 Press Escape or close the window to quit.
 

@@ -1,0 +1,147 @@
+name: Cross-platform build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os-name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: windows
+            arch: x64
+            runner: windows-latest
+            triplet: x64-windows
+          - os-name: windows
+            arch: arm64
+            runner: windows-11-arm
+            triplet: arm64-windows
+          - os-name: macos
+            arch: x64
+            runner: macos-13
+          - os-name: macos
+            arch: arm64
+            runner: macos-14
+          - os-name: linux
+            arch: x64
+            runner: ubuntu-latest
+          - os-name: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os-name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libsdl2-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev
+
+      - name: Install macOS dependencies
+        if: matrix.os-name == 'macos'
+        run: |
+          brew update
+          brew install cmake ninja pkg-config sdl2 ffmpeg
+
+      - name: Install Windows dependencies
+        if: matrix.os-name == 'windows'
+        shell: pwsh
+        run: |
+          choco install pkgconfiglite -y
+          & "$env:VCPKG_ROOT\vcpkg.exe" install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
+
+      - name: Configure Linux
+        if: matrix.os-name == 'linux'
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure macOS
+        if: matrix.os-name == 'macos'
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure Windows
+        if: matrix.os-name == 'windows'
+        shell: pwsh
+        run: |
+          $triplet = "${{ matrix.triplet }}"
+          $prefix = "$env:VCPKG_ROOT\installed\$triplet"
+          $env:PKG_CONFIG_PATH = "$prefix\lib\pkgconfig;$prefix\share\pkgconfig"
+          cmake -S . -B build `
+            -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$triplet"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package Linux
+        if: matrix.os-name == 'linux'
+        run: |
+          mkdir -p dist
+          cp build/sdp-sdl dist/sdp-sdl
+          tar -czf "sdp-sdl-linux-${{ matrix.arch }}.tar.gz" -C dist .
+
+      - name: Package macOS
+        if: matrix.os-name == 'macos'
+        run: |
+          mkdir -p dist
+          cp build/sdp-sdl dist/sdp-sdl
+          tar -czf "sdp-sdl-macos-${{ matrix.arch }}.tar.gz" -C dist .
+
+      - name: Package Windows
+        if: matrix.os-name == 'windows'
+        shell: pwsh
+        run: |
+          $triplet = "${{ matrix.triplet }}"
+          $prefix = "$env:VCPKG_ROOT\installed\$triplet"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "build\sdp-sdl.exe" "dist\sdp-sdl.exe"
+          Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination dist
+          Compress-Archive -Path dist\sdp-sdl.exe -DestinationPath "sdp-sdl-windows-${{ matrix.arch }}.zip"
+
+      - name: Upload Linux artifact
+        if: matrix.os-name == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdp-sdl-linux-${{ matrix.arch }}
+          path: sdp-sdl-linux-${{ matrix.arch }}.tar.gz
+
+      - name: Upload macOS artifact
+        if: matrix.os-name == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdp-sdl-macos-${{ matrix.arch }}
+          path: sdp-sdl-macos-${{ matrix.arch }}.tar.gz
+
+      - name: Upload Windows artifact
+        if: matrix.os-name == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdp-sdl-windows-${{ matrix.arch }}
+          path: sdp-sdl-windows-${{ matrix.arch }}.zip
