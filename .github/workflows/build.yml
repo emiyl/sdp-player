@@ -123,7 +123,7 @@ jobs:
           Copy-Item "build\sdp-sdl.exe" "dist\sdp-sdl.exe"
           Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
             Copy-Item -Destination dist
-          Compress-Archive -Path dist\sdp-sdl.exe -DestinationPath "sdp-sdl-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path dist\* -DestinationPath "sdp-sdl-windows-${{ matrix.arch }}.zip"
 
       - name: Upload Linux artifact
         if: matrix.os-name == 'linux'
