@@ -11,6 +11,19 @@
 #include <stdio.h>
 #include <string.h>
 
+static void render_video_frame(void *userdata,
+                               const SdpPlayerVideoFrame *frame)
+{
+    Gui *gui = userdata;
+    gui_render_yuv(
+        gui,
+        frame->planes,
+        frame->linesizes,
+        frame->width,
+        frame->height
+    );
+}
+
 int main(int argc, char **argv)
 {
     const char *sdp_path = NULL;
@@ -83,6 +96,10 @@ int main(int argc, char **argv)
                    process_audio ? network.audio_index : -1,
                    process_audio, process_video) != 0)
         fprintf(stderr, "SDP contains no supported video or audio stream\n");
+    if (process_video) {
+        media.video_callback = render_video_frame;
+        media.video_userdata = &gui;
+    }
     if (network_start(&network) != 0) {
         media_shutdown(&media);
         network_close(&network);

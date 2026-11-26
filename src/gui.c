@@ -189,7 +189,7 @@ void gui_draw_waiting(Gui *gui)
     gui_draw_status(gui, "Waiting for video stream...");
 }
 
-void gui_render_yuv(Gui *gui, const uint8_t *planes[4],
+void gui_render_yuv(Gui *gui, const uint8_t *const planes[4],
                     const int linesizes[4], int width, int height)
 {
     if (!gui || !gui->renderer)
