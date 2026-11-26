@@ -97,6 +97,7 @@ jobs:
         run: |
           $components = @(
             "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--add", "Microsoft.VisualStudio.Component.Windows11SDK.26100",
             "--includeRecommended"
           )
           if ("${{ matrix.arch }}" -eq "arm64") {
@@ -174,7 +175,18 @@ jobs:
           $vcarch = if ($platform -eq "arm64") { "arm64" } else { "x64" }
           cmd /d /c "`"$vcvars`" $vcarch && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$root\scripts\buildsystems\vcpkg.cmake`" -DVCPKG_TARGET_TRIPLET=$triplet"
 
-      - name: Build
+      - name: Build Windows
+        if: matrix.os-name == 'windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $instance = & $vswhere -latest -property installationPath
+          $vcvars = Join-Path $instance "VC\Auxiliary\Build\vcvarsall.bat"
+          $vcarch = if ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "x64" }
+          cmd /d /c "`"$vcvars`" $vcarch && cmake --build build --config Release"
+
+      - name: Build Unix
+        if: matrix.os-name != 'windows'
         run: cmake --build build --config Release
 
       - name: Package Linux
