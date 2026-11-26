@@ -25,6 +25,7 @@ jobs:
             arch: arm64
             runner: windows-latest
             triplet: arm64-windows
+            generator: Visual Studio 17 2022
           - os-name: macos
             arch: arm64
             runner: macos-latest
@@ -165,8 +166,10 @@ jobs:
           $root = Split-Path -Parent $vcpkg
           $prefix = "$root\installed\$triplet"
           $env:PKG_CONFIG_PATH = "$prefix\lib\pkgconfig;$prefix\share\pkgconfig"
+          $platform = "${{ matrix.arch }}"
           cmake -S . -B build `
-            -G "Ninja" `
+            -G "Visual Studio 17 2022" `
+            -A $platform `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$root\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="$triplet"
@@ -203,7 +206,7 @@ jobs:
           $root = Split-Path -Parent $vcpkg
           $prefix = "$root\installed\$triplet"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "build\sdp-player.exe" "dist\sdp-player.exe"
+          Copy-Item "build\Release\sdp-player.exe" "dist\sdp-player.exe"
           Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
             Copy-Item -Destination dist
           Compress-Archive -Path dist\* -DestinationPath "sdp-player-windows-${{ matrix.arch }}.zip"
