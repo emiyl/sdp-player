@@ -38,6 +38,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Linux apt packages
+        if: matrix.os-name == 'linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Cache macOS Homebrew downloads
+        if: matrix.os-name == 'macos'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            brew-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache Windows package dependencies
+        if: matrix.os-name == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\ProgramData\chocolatey\lib\pkgconfiglite
+            C:\ProgramData\chocolatey\cache
+            C:\vcpkg-binary-cache
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+          key: windows-packages-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            windows-packages-${{ matrix.arch }}-
+
       - name: Install Linux dependencies
         if: matrix.os-name == 'linux'
         run: |
@@ -82,7 +116,17 @@ jobs:
             & C:\vcpkg\bootstrap-vcpkg.bat
             $vcpkg = "C:\vcpkg\vcpkg.exe"
           }
+          New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,C:\vcpkg-binary-cache,readwrite"
           & $vcpkg install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ matrix.os-name }}-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt', 'src/**') }}
+          restore-keys: |
+            build-${{ matrix.os-name }}-${{ matrix.arch }}-
 
       - name: Configure Linux
         if: matrix.os-name == 'linux'
