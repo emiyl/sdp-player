@@ -1,4 +1,26 @@
-# sdp-sdl
+# sdp-player
+
+## Library API
+
+The project builds `libsdp-player-core.a` as the reusable streaming library and
+`sdp-player` as the SDL frontend. Include [sdp_sdl.h](include/sdp_sdl.h):
+
+```c
+#include <sdp_sdl.h>
+
+SdpPlayerOptions options = {
+    .process_video = 1,
+    .process_audio = 1,
+    .profile_path = NULL,
+};
+
+SdpPlayer *player = sdp_sdl_open("/path/to/source.sdp", &options);
+SdpPlayerFrame frame;
+while (sdp_sdl_poll(player, &frame)) {
+    /* The frontend processes frame.data and frame.size. */
+}
+sdp_sdl_close(player);
+```
 
 A low-latency C application that opens an SDP file and renders RTP audio/video
 with SDL2 and FFmpeg.
@@ -33,35 +55,35 @@ cmake --build build
 ## Run
 
 ```sh
-./build/sdp-sdl /path/to/source.sdp
+./build/sdp-player /path/to/source.sdp
 ```
 
 To receive video only:
 
 ```sh
-./build/sdp-sdl --no-audio /path/to/source.sdp
+./build/sdp-player --no-audio /path/to/source.sdp
 ```
 
 To receive audio only:
 
 ```sh
-./build/sdp-sdl --no-video /path/to/source.sdp
+./build/sdp-player --no-video /path/to/source.sdp
 ```
 
 To process neither stream:
 
 ```sh
-./build/sdp-sdl --no-video --no-audio /path/to/source.sdp
+./build/sdp-player --no-video --no-audio /path/to/source.sdp
 ```
 
 To write performance measurements to a specific CSV file:
 
 ```sh
-./build/sdp-sdl --profile /tmp/sdp-sdl-profile.csv /path/to/source.sdp
+./build/sdp-player --profile /tmp/sdp-player-profile.csv /path/to/source.sdp
 ```
 
 Without `--profile`, the app creates a timestamped
-`sdp-sdl-profile-YYYYMMDD-HHMMSS.csv` file in the current directory.
+`sdp-player-profile-YYYYMMDD-HHMMSS.csv` file in the current directory.
 
 Press Escape or close the window to quit.
 

@@ -136,7 +136,7 @@ int main(int argc, char **argv)
                 type = AVMEDIA_TYPE_AUDIO;
 
             Uint64 decode_start = SDL_GetPerformanceCounter();
-            if (media_decode_packet(&media, packet, type, &gui, &profile)) {
+            if (media_decode_packet(&media, packet, type, &profile)) {
                 video_received = 1;
                 stream_was_received = 1;
                 displayed_status = 0;
@@ -156,7 +156,7 @@ int main(int argc, char **argv)
             enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
             if (packet->stream_index == network.audio_index)
                 type = AVMEDIA_TYPE_AUDIO;
-            media_decode_packet(&media, packet, type, &gui, &profile);
+            media_decode_packet(&media, packet, type, &profile);
         }
 
         if (process_video) {

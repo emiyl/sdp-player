@@ -178,15 +178,15 @@ jobs:
         if: matrix.os-name == 'linux'
         run: |
           mkdir -p dist
-          cp build/sdp-sdl dist/sdp-sdl
-          tar -czf "sdp-sdl-linux-${{ matrix.arch }}.tar.gz" -C dist .
+          cp build/sdp-player dist/sdp-player
+          tar -czf "sdp-player-linux-${{ matrix.arch }}.tar.gz" -C dist .
 
       - name: Package macOS
         if: matrix.os-name == 'macos'
         run: |
           mkdir -p dist
-          cp build/sdp-sdl dist/sdp-sdl
-          tar -czf "sdp-sdl-macos-${{ matrix.arch }}.tar.gz" -C dist .
+          cp build/sdp-player dist/sdp-player
+          tar -czf "sdp-player-macos-${{ matrix.arch }}.tar.gz" -C dist .
 
       - name: Package Windows
         if: matrix.os-name == 'windows'
@@ -203,28 +203,28 @@ jobs:
           $root = Split-Path -Parent $vcpkg
           $prefix = "$root\installed\$triplet"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "build\sdp-sdl.exe" "dist\sdp-sdl.exe"
+          Copy-Item "build\sdp-player.exe" "dist\sdp-player.exe"
           Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
             Copy-Item -Destination dist
-          Compress-Archive -Path dist\* -DestinationPath "sdp-sdl-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path dist\* -DestinationPath "sdp-player-windows-${{ matrix.arch }}.zip"
 
       - name: Upload Linux artifact
         if: matrix.os-name == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: sdp-sdl-linux-${{ matrix.arch }}
-          path: sdp-sdl-linux-${{ matrix.arch }}.tar.gz
+          name: sdp-player-linux-${{ matrix.arch }}
+          path: sdp-player-linux-${{ matrix.arch }}.tar.gz
 
       - name: Upload macOS artifact
         if: matrix.os-name == 'macos'
         uses: actions/upload-artifact@v4
         with:
-          name: sdp-sdl-macos-${{ matrix.arch }}
-          path: sdp-sdl-macos-${{ matrix.arch }}.tar.gz
+          name: sdp-player-macos-${{ matrix.arch }}
+          path: sdp-player-macos-${{ matrix.arch }}.tar.gz
 
       - name: Upload Windows artifact
         if: matrix.os-name == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: sdp-sdl-windows-${{ matrix.arch }}
-          path: sdp-sdl-windows-${{ matrix.arch }}.zip
+          name: sdp-player-windows-${{ matrix.arch }}
+          path: sdp-player-windows-${{ matrix.arch }}.zip

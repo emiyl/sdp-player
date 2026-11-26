@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct DemuxContext {
     AVFormatContext *format;
@@ -189,7 +190,6 @@ void network_stop(Network *network)
     SDL_AtomicSet(&network->stop, 1);
     if (network->thread)
         SDL_WaitThread(network->thread, NULL);
-    network->thread = NULL;
 }
 
 void network_close(Network *network)

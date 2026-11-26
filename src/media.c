@@ -355,7 +355,7 @@ int media_init(Media *media, AVFormatContext *format,
 }
 
 int media_decode_packet(Media *media, AVPacket *packet,
-                        enum AVMediaType type, Gui *gui, Profile *profile)
+                        enum AVMediaType type, Profile *profile)
 {
     if (type == AVMEDIA_TYPE_AUDIO) {
         if (media->audio_decoder)
@@ -384,13 +384,16 @@ int media_decode_packet(Media *media, AVPacket *packet,
             if (media->frame->format == AV_PIX_FMT_YUV420P ||
                 media->frame->format == AV_PIX_FMT_YUVJ420P) {
                 Uint64 render_start = SDL_GetPerformanceCounter();
-                gui_render_yuv(
-                    gui,
-                    (const uint8_t **)media->frame->data,
-                    media->frame->linesize,
-                    media->frame->width,
-                    media->frame->height
-                );
+                if (media->video_callback) {
+                    SdpPlayerVideoFrame frame = {0};
+                    for (int i = 0; i < 4; i++) {
+                        frame.planes[i] = media->frame->data[i];
+                        frame.linesizes[i] = media->frame->linesize[i];
+                    }
+                    frame.width = media->frame->width;
+                    frame.height = media->frame->height;
+                    media->video_callback(media->video_userdata, &frame);
+                }
                 Uint64 render_end = SDL_GetPerformanceCounter();
                 if (profile)
                     profile_video_frame(
@@ -431,9 +434,16 @@ int media_decode_packet(Media *media, AVPacket *packet,
                       media->frame->linesize, 0, media->frame->height,
                       data, linesizes);
             Uint64 render_start = SDL_GetPerformanceCounter();
-            gui_render_yuv(gui, (const uint8_t **)data,
-                           linesizes, media->frame->width,
-                           media->frame->height);
+            if (media->video_callback) {
+                SdpPlayerVideoFrame frame = {0};
+                for (int i = 0; i < 4; i++) {
+                    frame.planes[i] = data[i];
+                    frame.linesizes[i] = linesizes[i];
+                }
+                frame.width = media->frame->width;
+                frame.height = media->frame->height;
+                media->video_callback(media->video_userdata, &frame);
+            }
             Uint64 render_end = SDL_GetPerformanceCounter();
             if (profile)
                 profile_video_frame(

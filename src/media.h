@@ -6,7 +6,7 @@
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 #include <SDL.h>
-#include "gui.h"
+#include "sdp_sdl.h"
 #include "profile.h"
 
 typedef struct Media {
@@ -33,13 +33,17 @@ typedef struct Media {
     size_t h264_pps_size;
     int h264_ready;
     Profile *profile;
+    SdpPlayerVideoCallback video_callback;
+    SdpPlayerAudioCallback audio_callback;
+    void *video_userdata;
+    void *audio_userdata;
 } Media;
 
 int media_init(Media *media, AVFormatContext *format,
                int video_index, int audio_index,
                int process_audio, int process_video);
 int media_decode_packet(Media *media, AVPacket *packet, enum AVMediaType type,
-                        Gui *gui, Profile *profile);
+                        Profile *profile);
 void media_shutdown(Media *media);
 
 #endif
