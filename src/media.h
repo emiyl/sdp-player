@@ -6,7 +6,7 @@
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 #include <SDL.h>
-#include "sdp_sdl.h"
+#include "sdp_player.h"
 #include "profile.h"
 
 typedef struct Media {

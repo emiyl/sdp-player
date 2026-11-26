@@ -39,21 +39,21 @@ typedef void (*SdpPlayerAudioCallback)(
     size_t size
 );
 
-void sdp_sdl_set_video_callback(
+void sdp_player_set_video_callback(
     SdpPlayer *player,
     SdpPlayerVideoCallback callback,
     void *userdata
 );
 
-void sdp_sdl_set_audio_callback(
+void sdp_player_set_audio_callback(
     SdpPlayer *player,
     SdpPlayerAudioCallback callback,
     void *userdata
 );
 
-SdpPlayer *sdp_sdl_open(const char *sdp_path, const SdpPlayerOptions *options);
-int sdp_sdl_poll(SdpPlayer *player, SdpPlayerFrame *frame);
-void sdp_sdl_close(SdpPlayer *player);
+SdpPlayer *sdp_player_open(const char *sdp_path, const SdpPlayerOptions *options);
+int sdp_player_poll(SdpPlayer *player, SdpPlayerFrame *frame);
+void sdp_player_close(SdpPlayer *player);
 
 #ifdef __cplusplus
 }

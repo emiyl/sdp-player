@@ -3,10 +3,10 @@
 ## Library API
 
 The project builds `libsdp-player-core.a` as the reusable streaming library and
-`sdp-player` as the SDL frontend. Include [sdp_sdl.h](include/sdp_sdl.h):
+`sdp-player` as the SDL frontend. Include [sdp_player.h](include/sdp_player.h):
 
 ```c
-#include <sdp_sdl.h>
+#include <sdp_player.h>
 
 SdpPlayerOptions options = {
     .process_video = 1,
@@ -14,12 +14,12 @@ SdpPlayerOptions options = {
     .profile_path = NULL,
 };
 
-SdpPlayer *player = sdp_sdl_open("/path/to/source.sdp", &options);
+SdpPlayer *player = sdp_player_open("/path/to/source.sdp", &options);
 SdpPlayerFrame frame;
-while (sdp_sdl_poll(player, &frame)) {
+while (sdp_player_poll(player, &frame)) {
     /* The frontend processes frame.data and frame.size. */
 }
-sdp_sdl_close(player);
+sdp_player_close(player);
 ```
 
 A low-latency C application that opens an SDP file and renders RTP audio/video
