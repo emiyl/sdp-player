@@ -23,7 +23,7 @@ jobs:
             triplet: x64-windows
           - os-name: windows
             arch: arm64
-            runner: windows-11-arm
+            runner: windows-latest
             triplet: arm64-windows
           - os-name: macos
             arch: arm64
@@ -64,7 +64,25 @@ jobs:
         shell: pwsh
         run: |
           choco install pkgconfiglite -y
-          & "$env:VCPKG_ROOT\vcpkg.exe" install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
+          $vcpkg = $null
+          $candidates = @(
+            "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe",
+            "$env:VCPKG_ROOT\vcpkg.exe",
+            "C:\vcpkg\vcpkg.exe",
+            "C:\src\vcpkg\vcpkg.exe"
+          )
+          foreach ($candidate in $candidates) {
+            if ($candidate -and (Test-Path $candidate)) {
+              $vcpkg = $candidate
+              break
+            }
+          }
+          if (-not $vcpkg) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
+            & C:\vcpkg\bootstrap-vcpkg.bat
+            $vcpkg = "C:\vcpkg\vcpkg.exe"
+          }
+          & $vcpkg install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
 
       - name: Configure Linux
         if: matrix.os-name == 'linux'
@@ -76,21 +94,37 @@ jobs:
       - name: Configure macOS
         if: matrix.os-name == 'macos'
         run: |
-          cmake -S . -B build \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            cmake -S . -B build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES=arm64
+          else
+            cmake -S . -B build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64
+          fi
 
       - name: Configure Windows
         if: matrix.os-name == 'windows'
         shell: pwsh
         run: |
           $triplet = "${{ matrix.triplet }}"
-          $prefix = "$env:VCPKG_ROOT\installed\$triplet"
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
+          }
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "C:\vcpkg\vcpkg.exe"
+          }
+          $root = Split-Path -Parent $vcpkg
+          $prefix = "$root\installed\$triplet"
           $env:PKG_CONFIG_PATH = "$prefix\lib\pkgconfig;$prefix\share\pkgconfig"
           cmake -S . -B build `
             -G "Ninja" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$root\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="$triplet"
 
       - name: Build
@@ -115,7 +149,15 @@ jobs:
         shell: pwsh
         run: |
           $triplet = "${{ matrix.triplet }}"
-          $prefix = "$env:VCPKG_ROOT\installed\$triplet"
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
+          }
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "C:\vcpkg\vcpkg.exe"
+          }
+          $root = Split-Path -Parent $vcpkg
+          $prefix = "$root\installed\$triplet"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "build\sdp-sdl.exe" "dist\sdp-sdl.exe"
           Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
