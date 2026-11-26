@@ -13,8 +13,8 @@ typedef struct Media {
     AVCodecContext *video_decoder;
     AVCodecContext *audio_decoder;
     AVFrame *frame;
-    SwsContext *sws;
-    SwrContext *swr;
+    struct SwsContext *sws;
+    struct SwrContext *swr;
     int sws_width;
     int sws_height;
     enum AVPixelFormat sws_format;
