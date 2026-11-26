@@ -134,10 +134,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: build-${{ matrix.os-name }}-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt', 'src/**') }}
+          key: cmake-build-${{ matrix.os-name }}-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt', 'src/**') }}
           restore-keys: |
-            build-${{ matrix.os-name }}-${{ matrix.arch }}-
-            
+            cmake-build-${{ matrix.os-name }}-${{ matrix.arch }}-
+
       - name: Configure Linux
         if: matrix.os-name == 'linux'
         run: |
