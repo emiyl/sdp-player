@@ -19,13 +19,16 @@ jobs:
         include:
           - os-name: windows
             arch: x64
-            runner: windows-latest
-            triplet: x64-windows
+            runner: ubuntu-latest
+            triplet: x64-mingw-static
+            compiler: x86_64-w64-mingw32-gcc
+            cxx_compiler: x86_64-w64-mingw32-g++
           - os-name: windows
             arch: arm64
-            runner: windows-latest
-            triplet: arm64-windows
-            generator: Visual Studio 17 2022
+            runner: ubuntu-latest
+            triplet: arm64-mingw-static
+            compiler: aarch64-w64-mingw32-gcc
+            cxx_compiler: aarch64-w64-mingw32-g++
           - os-name: macos
             arch: arm64
             runner: macos-latest
@@ -40,13 +43,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache Linux apt packages
-        if: matrix.os-name == 'linux'
+        if: matrix.os-name == 'linux' || matrix.os-name == 'windows'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
             /var/lib/apt/lists
-          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt') }}
+          key: apt-${{ matrix.os-name }}-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Cache macOS Homebrew downloads
         if: matrix.os-name == 'macos'
@@ -64,11 +67,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            C:\ProgramData\chocolatey\lib\pkgconfiglite
-            C:\ProgramData\chocolatey\cache
-            C:\vcpkg-binary-cache
-            C:\vcpkg\downloads
-            C:\vcpkg\installed
+            /tmp/vcpkg-binary-cache
+            /usr/local/share/vcpkg/downloads
+            /usr/local/share/vcpkg/installed
           key: windows-packages-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: |
             windows-packages-${{ matrix.arch }}-
@@ -96,30 +97,21 @@ jobs:
 
       - name: Install Windows dependencies
         if: matrix.os-name == 'windows'
-        shell: pwsh
         run: |
-          choco install pkgconfiglite -y
-          $vcpkg = $null
-          $candidates = @(
-            "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe",
-            "$env:VCPKG_ROOT\vcpkg.exe",
-            "C:\vcpkg\vcpkg.exe",
-            "C:\src\vcpkg\vcpkg.exe"
-          )
-          foreach ($candidate in $candidates) {
-            if ($candidate -and (Test-Path $candidate)) {
-              $vcpkg = $candidate
-              break
-            }
-          }
-          if (-not $vcpkg) {
-            git clone --depth 1 https://github.com/microsoft/vcpkg.git C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat
-            $vcpkg = "C:\vcpkg\vcpkg.exe"
-          }
-          New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
-          $env:VCPKG_BINARY_SOURCES = "clear;files,C:\vcpkg-binary-cache,readwrite"
-          & $vcpkg install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config zip \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            gcc-mingw-w64-aarch64 g++-mingw-w64-aarch64
+          if [ ! -x /usr/local/share/vcpkg/vcpkg ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git /tmp/vcpkg
+            /tmp/vcpkg/bootstrap-vcpkg.sh
+            sudo mv /tmp/vcpkg /usr/local/share/vcpkg
+          fi
+          export VCPKG_BINARY_SOURCES="clear;files,/tmp/vcpkg-binary-cache,readwrite"
+          mkdir -p /tmp/vcpkg-binary-cache
+          /usr/local/share/vcpkg/vcpkg install \
+            sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -153,26 +145,16 @@ jobs:
 
       - name: Configure Windows
         if: matrix.os-name == 'windows'
-        shell: pwsh
         run: |
-          $triplet = "${{ matrix.triplet }}"
-          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
-          if (-not (Test-Path $vcpkg)) {
-            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
-          }
-          if (-not (Test-Path $vcpkg)) {
-            $vcpkg = "C:\vcpkg\vcpkg.exe"
-          }
-          $root = Split-Path -Parent $vcpkg
-          $prefix = "$root\installed\$triplet"
-          $env:PKG_CONFIG_PATH = "$prefix\lib\pkgconfig;$prefix\share\pkgconfig"
-          $platform = "${{ matrix.arch }}"
-          cmake -S . -B build `
-            -G "Visual Studio 17 2022" `
-            -A $platform `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$root\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET="$triplet"
+          export PKG_CONFIG_PATH="/usr/local/share/vcpkg/installed/${{ matrix.triplet }}/lib/pkgconfig"
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER="${{ matrix.compiler }}" \
+            -DCMAKE_CXX_COMPILER="${{ matrix.cxx_compiler }}" \
+            -DCMAKE_TOOLCHAIN_FILE="/usr/local/share/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}"
 
       - name: Build
         run: cmake --build build --config Release
@@ -193,23 +175,10 @@ jobs:
 
       - name: Package Windows
         if: matrix.os-name == 'windows'
-        shell: pwsh
         run: |
-          $triplet = "${{ matrix.triplet }}"
-          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
-          if (-not (Test-Path $vcpkg)) {
-            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
-          }
-          if (-not (Test-Path $vcpkg)) {
-            $vcpkg = "C:\vcpkg\vcpkg.exe"
-          }
-          $root = Split-Path -Parent $vcpkg
-          $prefix = "$root\installed\$triplet"
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "build\Release\sdp-player.exe" "dist\sdp-player.exe"
-          Get-ChildItem "$prefix\bin\*.dll" -ErrorAction SilentlyContinue |
-            Copy-Item -Destination dist
-          Compress-Archive -Path dist\* -DestinationPath "sdp-player-windows-${{ matrix.arch }}.zip"
+          mkdir -p dist
+          cp build/sdp-player.exe dist/sdp-player.exe
+          zip -r "sdp-player-windows-${{ matrix.arch }}.zip" dist
 
       - name: Upload Linux artifact
         if: matrix.os-name == 'linux'

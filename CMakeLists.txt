@@ -57,6 +57,12 @@ target_link_libraries(sdp-player PRIVATE
     sdp-player-core
 )
 
+if(WIN32)
+    if(MINGW)
+        target_link_options(sdp-player PRIVATE -mconsole)
+    endif()
+endif()
+
 set_target_properties(sdp-player-core PROPERTIES
     OUTPUT_NAME sdp-player-core
 )
