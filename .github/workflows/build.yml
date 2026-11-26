@@ -19,16 +19,12 @@ jobs:
         include:
           - os-name: windows
             arch: x64
-            runner: ubuntu-latest
-            triplet: x64-mingw-static
-            compiler: x86_64-w64-mingw32-gcc
-            cxx_compiler: x86_64-w64-mingw32-g++
+            runner: windows-latest
+            triplet: x64-windows
           - os-name: windows
             arch: arm64
-            runner: ubuntu-latest
-            triplet: arm64-mingw-static
-            compiler: aarch64-w64-mingw32-gcc
-            cxx_compiler: aarch64-w64-mingw32-g++
+            runner: windows-11-arm
+            triplet: arm64-windows
           - os-name: macos
             arch: arm64
             runner: macos-latest
@@ -67,9 +63,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /tmp/vcpkg-binary-cache
-            /usr/local/share/vcpkg/downloads
-            /usr/local/share/vcpkg/installed
+            C:\vcpkg-binary-cache
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
           key: windows-packages-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: |
             windows-packages-${{ matrix.arch }}-
@@ -97,21 +93,41 @@ jobs:
 
       - name: Install Windows dependencies
         if: matrix.os-name == 'windows'
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake ninja-build pkg-config zip \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
-            gcc-mingw-w64-aarch64 g++-mingw-w64-aarch64
-          if [ ! -x /usr/local/share/vcpkg/vcpkg ]; then
-            git clone --depth 1 https://github.com/microsoft/vcpkg.git /tmp/vcpkg
-            /tmp/vcpkg/bootstrap-vcpkg.sh
-            sudo mv /tmp/vcpkg /usr/local/share/vcpkg
-          fi
-          export VCPKG_BINARY_SOURCES="clear;files,/tmp/vcpkg-binary-cache,readwrite"
-          mkdir -p /tmp/vcpkg-binary-cache
-          /usr/local/share/vcpkg/vcpkg install \
-            sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
+          $components = @(
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--includeRecommended"
+          )
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $components += @(
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64EC"
+            )
+          }
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          if (Test-Path $installer) {
+            Start-Process -FilePath $installer `
+              -ArgumentList (@("modify", "--installPath", "C:\VS", "--quiet", "--norestart") + $components) `
+              -Wait
+          } else {
+            $bootstrapper = "$env:TEMP\vs_buildtools.exe"
+            Invoke-WebRequest `
+              -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" `
+              -OutFile $bootstrapper
+            Start-Process -FilePath $bootstrapper `
+              -ArgumentList (@("--quiet", "--wait", "--norestart", "--nocache") + $components) `
+              -Wait
+          }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "C:\vcpkg\vcpkg.exe"
+          }
+          New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,C:\vcpkg-binary-cache,readwrite"
+          & $vcpkg install sdl2 ffmpeg --triplet "${{ matrix.triplet }}"
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -145,16 +161,26 @@ jobs:
 
       - name: Configure Windows
         if: matrix.os-name == 'windows'
+        shell: pwsh
         run: |
-          export PKG_CONFIG_PATH="/usr/local/share/vcpkg/installed/${{ matrix.triplet }}/lib/pkgconfig"
-          cmake -S . -B build \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_C_COMPILER="${{ matrix.compiler }}" \
-            -DCMAKE_CXX_COMPILER="${{ matrix.cxx_compiler }}" \
-            -DCMAKE_TOOLCHAIN_FILE="/usr/local/share/vcpkg/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $instance = & $vswhere -latest -property installationPath
+          if (-not $instance) {
+            throw "Visual Studio C++ Build Tools were not found"
+          }
+          $vcvars = Join-Path $instance "VC\Auxiliary\Build\vcvarsall.bat"
+          if (-not (Test-Path $vcvars)) {
+            throw "vcvarsall.bat was not found at $vcvars"
+          }
+          $triplet = "${{ matrix.triplet }}"
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            $vcpkg = "C:\vcpkg\vcpkg.exe"
+          }
+          $root = Split-Path -Parent $vcpkg
+          $platform = "${{ matrix.arch }}"
+          $vcarch = if ($platform -eq "arm64") { "arm64" } else { "x64" }
+          cmd /d /c "`"$vcvars`" $vcarch && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$root\scripts\buildsystems\vcpkg.cmake`" -DVCPKG_TARGET_TRIPLET=$triplet"
 
       - name: Build
         run: cmake --build build --config Release
@@ -175,10 +201,15 @@ jobs:
 
       - name: Package Windows
         if: matrix.os-name == 'windows'
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp build/sdp-player.exe dist/sdp-player.exe
-          zip -r "sdp-player-windows-${{ matrix.arch }}.zip" dist
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $binary = "build\sdp-player.exe"
+          if (Test-Path "build\Release\sdp-player.exe") {
+            $binary = "build\Release\sdp-player.exe"
+          }
+          Copy-Item $binary "dist\sdp-player.exe"
+          Compress-Archive -Path dist\* -DestinationPath "sdp-player-windows-${{ matrix.arch }}.zip"
 
       - name: Upload Linux artifact
         if: matrix.os-name == 'linux'
