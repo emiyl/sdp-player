@@ -10,6 +10,8 @@ add_compile_definitions(SDL_MAIN_HANDLED=1)
 
 find_package(PkgConfig REQUIRED)
 
+set(ENV{PKG_CONFIG_ARGN} "--static")
+
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(LIBAVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(LIBAVCODEC REQUIRED IMPORTED_TARGET libavcodec)
@@ -59,7 +61,34 @@ target_link_libraries(sdp-player PRIVATE
     sdp-player-core
 )
 
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif(WIN32)
+    target_link_options(sdp-player PRIVATE -static -static-libgcc)
+elseif(UNIX AND NOT APPLE)
+    target_link_options(sdp-player PRIVATE -static)
+endif()
+
 if(WIN32)
+    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_TARGET_TRIPLET}" CACHE STRING "")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif(APPLE)
+    target_link_libraries(sdp-player-core PUBLIC
+        "-framework CoreAudio"
+        "-framework AudioUnit"
+        "-framework AudioToolbox"
+        "-framework CoreFoundation"
+        "-framework Security"
+    )
+elseif(UNIX)
+    target_link_libraries(sdp-player-core PUBLIC
+        m
+        pthread
+        dl
+        z
+        bz2
+        lzma
+    )
     if(MINGW)
         target_link_options(sdp-player PRIVATE -mconsole)
     endif()
