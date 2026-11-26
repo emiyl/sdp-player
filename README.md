@@ -65,6 +65,9 @@ Without `--profile`, the app creates a timestamped
 
 Press Escape or close the window to quit.
 
+Audio playback uses SDL queued audio with a bounded 64 KB queue and a 16 KB
+prebuffer. This prevents callback underruns and limits audio/video backlog.
+
 The player disables FFmpeg's decoder threading and probing delays where
 possible, sets the RTP reorder queue to zero, and presents each decoded video
 frame immediately without SDL or application-side frame buffering. Network
