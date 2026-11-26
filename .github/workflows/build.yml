@@ -182,8 +182,19 @@ jobs:
           }
           $root = Split-Path -Parent $vcpkg
           $platform = "${{ matrix.arch }}"
+          $staticLibDir = "$root\installed\${{ matrix.triplet }}\lib"
+          if (-not (Test-Path "$staticLibDir\SDL2-static.lib")) {
+            throw "Static SDL2 library was not found at $staticLibDir"
+          }
+          foreach ($lib in @("avformat.lib", "avcodec.lib", "avutil.lib", "swscale.lib", "swresample.lib")) {
+            if (-not (Test-Path "$staticLibDir\$lib")) {
+              throw "Static FFmpeg library $lib was not found at $staticLibDir"
+            }
+          }
           $vcarch = if ($platform -eq "arm64") { "arm64" } else { "x64" }
-          cmd /d /c "`"$vcvars`" $vcarch && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$root\scripts\buildsystems\vcpkg.cmake`" -DVCPKG_TARGET_TRIPLET=$triplet"
+          $env:VCPKG_INSTALLED_DIR = "$root\installed"
+          $env:VCPKG_TARGET_TRIPLET = $triplet
+          cmd /d /c "`"$vcvars`" $vcarch && set VCPKG_INSTALLED_DIR=$root\installed && set VCPKG_TARGET_TRIPLET=$triplet && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$root\scripts\buildsystems\vcpkg.cmake`" -DVCPKG_TARGET_TRIPLET=$triplet -DVCPKG_INSTALLED_DIR=`"$root\installed`""
 
       - name: Build Windows
         if: matrix.os-name == 'windows'

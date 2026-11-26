@@ -21,7 +21,26 @@ if(NOT WIN32)
     pkg_check_modules(LIBSWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
 else()
     find_package(SDL2 CONFIG REQUIRED)
-    find_package(FFmpeg CONFIG REQUIRED)
+endif()
+
+if(WIN32)
+    if(NOT DEFINED VCPKG_INSTALLED_DIR)
+        set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_INSTALLED_DIR}")
+    endif()
+    if(NOT VCPKG_INSTALLED_DIR)
+        set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed")
+    endif()
+    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_TARGET_TRIPLET}" CACHE STRING "")
+    set(VCPKG_TRIPLET_DIR
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+    )
+    if(EXISTS "${VCPKG_TRIPLET_DIR}/include")
+        include_directories(SYSTEM
+            "${VCPKG_TRIPLET_DIR}/include"
+            "${VCPKG_TRIPLET_DIR}/include/SDL2"
+        )
+        link_directories("${VCPKG_TRIPLET_DIR}/lib")
+    endif()
 endif()
 
 add_library(sdp-player-core
