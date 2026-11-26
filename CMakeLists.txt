@@ -18,10 +18,12 @@ add_executable(sdp-sdl
     src/gui.c
     src/network.c
     src/media.c
+    src/profile.c
 )
 
 target_include_directories(sdp-sdl PRIVATE
     ${SDL2_INCLUDE_DIRS}
+    ${LIBAVFORMAT_INCLUDE_DIRS}
     ${LIBAVCODEC_INCLUDE_DIRS}
     ${LIBAVUTIL_INCLUDE_DIRS}
     ${LIBSWSCALE_INCLUDE_DIRS}

@@ -51,12 +51,13 @@ static void packet_queue_push(PacketQueue *queue, AVPacket *packet)
         queue->head = entry;
     queue->tail = entry;
     queue->count++;
-    while (queue->count > 256 && queue->head) {
+    while (queue->count > 64 && queue->head) {
         PacketQueueEntry *overflow = queue->head;
         queue->head = overflow->next;
         if (!queue->head)
             queue->tail = NULL;
         queue->count--;
+        queue->dropped_packets++;
         av_packet_free(&overflow->packet);
         free(overflow);
     }
@@ -128,6 +129,24 @@ int network_start(Network *network)
     network->thread =
         SDL_CreateThread(demux_thread, "RTP demux", network);
     return network->thread ? 0 : -1;
+}
+
+size_t network_queue_depth(Network *network)
+{
+    size_t count = 0;
+    SDL_LockMutex(network->queue.mutex);
+    count = network->queue.count;
+    SDL_UnlockMutex(network->queue.mutex);
+    return count;
+}
+
+Uint64 network_dropped_packets(Network *network)
+{
+    Uint64 dropped;
+    SDL_LockMutex(network->queue.mutex);
+    dropped = network->queue.dropped_packets;
+    SDL_UnlockMutex(network->queue.mutex);
+    return dropped;
 }
 
 void network_disable_audio(Network *network)

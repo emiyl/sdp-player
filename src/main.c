@@ -6,6 +6,7 @@
 #include "gui.h"
 #include "media.h"
 #include "network.h"
+#include "profile.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,10 +16,11 @@ int main(int argc, char **argv)
     const char *sdp_path = NULL;
     int process_audio = 1;
     int process_video = 1;
+    const char *profile_path = NULL;
 
     if (argc < 2) {
         fprintf(stderr,
-                "Usage: %s [--no-video] [--no-audio] <file.sdp>\n",
+                "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
                 argv[0]);
         return 2;
     }
@@ -28,12 +30,21 @@ int main(int argc, char **argv)
             process_audio = 0;
         else if (strcmp(argv[i], "--no-video") == 0)
             process_video = 0;
+        else if (strcmp(argv[i], "--profile") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr,
+                        "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
+                        argv[0]);
+                return 2;
+            }
+            profile_path = argv[++i];
+        }
         else
             sdp_path = argv[i];
     }
     if (!sdp_path) {
         fprintf(stderr,
-                "Usage: %s [--no-video] [--no-audio] <file.sdp>\n",
+                "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
                 argv[0]);
         return 2;
     }
@@ -49,6 +60,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    Profile profile;
+    if (profile_init(&profile, profile_path) != 0) {
+        fprintf(stderr, "Could not create performance profile log\n");
+        return 1;
+    }
+
     Network network;
     if (network_open(&network, sdp_path) != 0) {
         gui_shutdown(&gui);
@@ -60,6 +77,7 @@ int main(int argc, char **argv)
         network_disable_video(&network);
 
     Media media;
+    media.profile = &profile;
     if (media_init(&media, network.format,
                    network.video_index,
                    process_audio ? network.audio_index : -1,
@@ -103,6 +121,11 @@ int main(int argc, char **argv)
         if (process_video &&
             network_pop_packet(&network, packet)) {
             last_packet_ms = SDL_GetTicks();
+            profile_packet(
+                &profile,
+                packet->stream_index == network.video_index,
+                (size_t)packet->size
+            );
             if (stream_was_received && !video_received)
                 gui_draw_status(&gui, "Reconnecting...");
 
@@ -112,17 +135,28 @@ int main(int argc, char **argv)
             else if (packet->stream_index == network.audio_index)
                 type = AVMEDIA_TYPE_AUDIO;
 
-            if (media_decode_packet(&media, packet, type, &gui)) {
+            Uint64 decode_start = SDL_GetPerformanceCounter();
+            if (media_decode_packet(&media, packet, type, &gui, &profile)) {
                 video_received = 1;
                 stream_was_received = 1;
                 displayed_status = 0;
                 last_packet_ms = SDL_GetTicks();
             }
+            Uint64 decode_end = SDL_GetPerformanceCounter();
+            Uint64 decode_us =
+                (decode_end - decode_start) * 1000000 /
+                SDL_GetPerformanceFrequency();
+            profile_decode_time(&profile, decode_us);
         } else if (network_pop_packet(&network, packet)) {
+            profile_packet(
+                &profile,
+                packet->stream_index == network.video_index,
+                (size_t)packet->size
+            );
             enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
             if (packet->stream_index == network.audio_index)
                 type = AVMEDIA_TYPE_AUDIO;
-            media_decode_packet(&media, packet, type, &gui);
+            media_decode_packet(&media, packet, type, &gui, &profile);
         }
 
         if (process_video) {
@@ -150,7 +184,13 @@ int main(int argc, char **argv)
             }
         }
 
-        SDL_Delay(10);
+        profile_sample(
+            &profile,
+            network_queue_depth(&network),
+            network_dropped_packets(&network),
+            profile.read_errors
+        );
+        SDL_Delay(1);
         av_packet_unref(packet);
     }
 
@@ -158,6 +198,7 @@ int main(int argc, char **argv)
     network_stop(&network);
     media_shutdown(&media);
     network_close(&network);
+    profile_finish(&profile);
     if (process_video)
         gui_shutdown(&gui);
     else

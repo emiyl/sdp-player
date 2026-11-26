@@ -10,6 +10,7 @@
 #include <stdlib.h>
 
 #define AUDIO_RING_SIZE (64 * 1024)
+#define AUDIO_PREBUFFER_BYTES (16 * 1024)
 
 typedef struct AudioRing {
     unsigned char data[AUDIO_RING_SIZE];
@@ -85,7 +86,10 @@ static void audio_callback(void *userdata, Uint8 *stream, int length)
     if (!audio_ring_mutex)
         return;
     SDL_LockMutex(audio_ring_mutex);
-    ring_read(stream, (size_t)length);
+    if (ring_buffered() >= AUDIO_PREBUFFER_BYTES)
+        ring_read(stream, (size_t)length);
+    else
+        memset(stream, 0, (size_t)length);
     SDL_UnlockMutex(audio_ring_mutex);
 }
 
@@ -178,6 +182,8 @@ static int audio_thread(void *opaque)
                         SDL_LockMutex(audio_ring_mutex);
                         ring_write(output, bytes);
                         SDL_UnlockMutex(audio_ring_mutex);
+                        if (media->profile)
+                            profile_audio_frame(media->profile, bytes);
                     }
                     av_freep(&output);
                 }
@@ -194,6 +200,8 @@ static int audio_thread(void *opaque)
 
 static void cache_h264_parameters(Media *media, AVPacket *packet)
 {
+    int found_sps = 0;
+    int found_pps = 0;
     for (size_t i = 0; i + 4 < (size_t)packet->size;) {
         size_t start_code_size = 0;
         if (packet->data[i] == 0 && packet->data[i + 1] == 0 &&
@@ -224,6 +232,7 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
 
         unsigned type = packet->data[nal_start] & 0x1f;
         if (type == 7) {
+            found_sps = 1;
             free(media->h264_sps);
             media->h264_sps_size = next - i;
             media->h264_sps = malloc(media->h264_sps_size);
@@ -231,6 +240,7 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
                 memcpy(media->h264_sps, packet->data + i,
                        media->h264_sps_size);
         } else if (type == 8) {
+            found_pps = 1;
             free(media->h264_pps);
             media->h264_pps_size = next - i;
             media->h264_pps = malloc(media->h264_pps_size);
@@ -241,7 +251,8 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
         i = next;
     }
 
-    if (!media->h264_sps || !media->h264_pps)
+    if (!found_sps || !found_pps ||
+        !media->h264_sps || !media->h264_pps)
         return;
 
     size_t parameter_size =
@@ -256,8 +267,10 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
     free(media->h264_parameter_sets);
     media->h264_parameter_sets = parameters;
     media->h264_parameter_sets_size = parameter_size;
-    media->h264_ready = 1;
-    avcodec_flush_buffers(media->video_decoder);
+    if (!media->h264_ready) {
+        media->h264_ready = 1;
+        avcodec_flush_buffers(media->video_decoder);
+    }
 }
 
 int media_init(Media *media, AVFormatContext *format,
@@ -339,7 +352,7 @@ int media_init(Media *media, AVFormatContext *format,
 }
 
 int media_decode_packet(Media *media, AVPacket *packet,
-                        enum AVMediaType type, Gui *gui)
+                        enum AVMediaType type, Gui *gui, Profile *profile)
 {
     if (type == AVMEDIA_TYPE_AUDIO) {
         if (media->audio_decoder)
@@ -367,6 +380,7 @@ int media_decode_packet(Media *media, AVPacket *packet,
         if (type == AVMEDIA_TYPE_VIDEO) {
             if (media->frame->format == AV_PIX_FMT_YUV420P ||
                 media->frame->format == AV_PIX_FMT_YUVJ420P) {
+                Uint64 render_start = SDL_GetPerformanceCounter();
                 gui_render_yuv(
                     gui,
                     (const uint8_t **)media->frame->data,
@@ -374,6 +388,14 @@ int media_decode_packet(Media *media, AVPacket *packet,
                     media->frame->width,
                     media->frame->height
                 );
+                Uint64 render_end = SDL_GetPerformanceCounter();
+                if (profile)
+                    profile_video_frame(
+                        profile,
+                        0,
+                        (render_end - render_start) * 1000000 /
+                            SDL_GetPerformanceFrequency()
+                    );
                 av_frame_unref(media->frame);
                 received_video = 1;
                 continue;
@@ -405,9 +427,18 @@ int media_decode_packet(Media *media, AVPacket *packet,
                       (const uint8_t *const *)media->frame->data,
                       media->frame->linesize, 0, media->frame->height,
                       data, linesizes);
+            Uint64 render_start = SDL_GetPerformanceCounter();
             gui_render_yuv(gui, (const uint8_t **)data,
                            linesizes, media->frame->width,
                            media->frame->height);
+            Uint64 render_end = SDL_GetPerformanceCounter();
+            if (profile)
+                profile_video_frame(
+                    profile,
+                    0,
+                    (render_end - render_start) * 1000000 /
+                        SDL_GetPerformanceFrequency()
+                );
             av_freep(&data[0]);
             received_video = 1;
         }

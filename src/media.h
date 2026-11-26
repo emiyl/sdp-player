@@ -7,6 +7,7 @@
 #include <libswscale/swscale.h>
 #include <SDL.h>
 #include "gui.h"
+#include "profile.h"
 
 typedef struct Media {
     AVCodecContext *video_decoder;
@@ -31,13 +32,14 @@ typedef struct Media {
     uint8_t *h264_pps;
     size_t h264_pps_size;
     int h264_ready;
+    Profile *profile;
 } Media;
 
 int media_init(Media *media, AVFormatContext *format,
                int video_index, int audio_index,
                int process_audio, int process_video);
 int media_decode_packet(Media *media, AVPacket *packet, enum AVMediaType type,
-                        Gui *gui);
+                        Gui *gui, Profile *profile);
 void media_shutdown(Media *media);
 
 #endif

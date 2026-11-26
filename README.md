@@ -52,6 +52,15 @@ To process neither stream:
 ```sh
 ./build/sdp-sdl --no-video --no-audio /path/to/source.sdp
 ```
+
+To write performance measurements to a specific CSV file:
+
+```sh
+./build/sdp-sdl --profile /tmp/sdp-sdl-profile.csv /path/to/source.sdp
+```
+
+Without `--profile`, the app creates a timestamped
+`sdp-sdl-profile-YYYYMMDD-HHMMSS.csv` file in the current directory.
 ```
 
 Press Escape or close the window to quit.
