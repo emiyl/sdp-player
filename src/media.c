@@ -179,9 +179,13 @@ static int audio_thread(void *opaque)
                     if (converted > 0) {
                         size_t bytes =
                             (size_t)converted * 2 * sizeof(int16_t);
-                        SDL_LockMutex(audio_ring_mutex);
-                        ring_write(output, bytes);
-                        SDL_UnlockMutex(audio_ring_mutex);
+                        if (media->audio_device) {
+                                if (SDL_GetQueuedAudioSize(media->audio_device) >= 65536)
+                                    SDL_ClearQueuedAudio(media->audio_device);
+                            SDL_QueueAudio(media->audio_device, output, (Uint32)bytes);
+                            if (SDL_GetQueuedAudioSize(media->audio_device) >= 16384)
+                                SDL_PauseAudioDevice(media->audio_device, 0);
+                        }
                         if (media->profile)
                             profile_audio_frame(media->profile, bytes);
                     }
@@ -316,12 +320,11 @@ int media_init(Media *media, AVFormatContext *format,
             wanted.format = AUDIO_S16SYS;
             wanted.channels = 2;
             wanted.samples = 256;
-            wanted.callback = audio_callback;
-            audio_ring_mutex = SDL_CreateMutex();
+            wanted.callback = NULL;
             media->audio_device =
                 SDL_OpenAudioDevice(NULL, 0, &wanted, &obtained, 0);
             if (media->audio_device)
-                SDL_PauseAudioDevice(media->audio_device, 0);
+                SDL_PauseAudioDevice(media->audio_device, 1);
 
             AVChannelLayout out_layout;
             av_channel_layout_default(&out_layout, 2);
