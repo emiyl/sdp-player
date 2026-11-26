@@ -26,12 +26,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (network.video_index >= 0 &&
-        network.format->streams[network.video_index]->codecpar->width <= 0)
-        fprintf(stderr,
-                "Warning: the SDP has no sprop-parameter-sets and H264 SPS/PPS "
-                "was not received during startup.\n");
-
     Media media;
     if (media_init(&media, network.format,
                    network.video_index, network.audio_index) != 0)

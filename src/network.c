@@ -6,7 +6,7 @@
 #include <string.h>
 
 typedef struct DemuxContext {
-    Network *network;
+    AVFormatContext *format;
 } DemuxContext;
 
 static void av_error(const char *operation, int error)
@@ -27,6 +27,7 @@ static void packet_queue_destroy(PacketQueue *queue)
         free(entry);
     }
     queue->tail = NULL;
+    queue->count = 0;
     if (queue->mutex) {
         SDL_UnlockMutex(queue->mutex);
         SDL_DestroyMutex(queue->mutex);
@@ -49,7 +50,84 @@ static void packet_queue_push(PacketQueue *queue, AVPacket *packet)
     else
         queue->head = entry;
     queue->tail = entry;
+    queue->count++;
+    while (queue->count > 256 && queue->head) {
+        PacketQueueEntry *overflow = queue->head;
+        queue->head = overflow->next;
+        if (!queue->head)
+            queue->tail = NULL;
+        queue->count--;
+        av_packet_free(&overflow->packet);
+        free(overflow);
+    }
     SDL_UnlockMutex(queue->mutex);
+}
+
+static int demux_interrupt_callback(void *opaque)
+{
+    Network *network = opaque;
+    return SDL_AtomicGet(&network->stop);
+}
+
+static int demux_thread(void *opaque)
+{
+    Network *network = opaque;
+    AVPacket *packet = av_packet_alloc();
+    while (!SDL_AtomicGet(&network->stop)) {
+        av_packet_unref(packet);
+        if (av_read_frame(network->format, packet) < 0) {
+            av_packet_unref(packet);
+            SDL_Delay(25);
+        } else {
+            packet_queue_push(&network->queue, packet);
+        }
+    }
+    av_packet_free(&packet);
+    return 0;
+}
+
+int network_open(Network *network, const char *sdp_path)
+{
+    memset(network, 0, sizeof(*network));
+    avformat_network_init();
+    network->queue.mutex = SDL_CreateMutex();
+
+    AVDictionary *options = NULL;
+    av_dict_set(&options, "protocol_whitelist", "file,udp,rtp,rtcp", 0);
+    av_dict_set(&options, "buffer_size", "4194304", 0);
+    av_dict_set(&options, "reorder_queue_size", "0", 0);
+    av_dict_set(&options, "timeout", "100000", 0);
+    av_dict_set(&options, "rw_timeout", "100000", 0);
+    av_dict_set(&options, "max_delay", "50000", 0);
+
+    int error = avformat_open_input(&network->format, sdp_path, NULL, &options);
+    av_dict_free(&options);
+    if (error < 0) {
+        av_error("Could not open SDP", error);
+        packet_queue_destroy(&network->queue);
+        avformat_network_deinit();
+        return -1;
+    }
+
+    network->format->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
+    network->format->interrupt_callback.callback = demux_interrupt_callback;
+    network->format->interrupt_callback.opaque = network;
+
+    av_dump_format(network->format, 0, sdp_path, 0);
+    network->video_index =
+        av_find_best_stream(network->format, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    network->audio_index =
+        av_find_best_stream(network->format, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    network->has_video = network->video_index >= 0;
+    network->has_audio = network->audio_index >= 0;
+    return 0;
+}
+
+int network_start(Network *network)
+{
+    network->thread =
+        SDL_CreateThread(demux_thread, "RTP demux", network);
+    return network->thread ? 0 : -1;
 }
 
 int network_pop_packet(Network *network, AVPacket *packet)
@@ -64,6 +142,8 @@ int network_pop_packet(Network *network, AVPacket *packet)
     queue->head = entry->next;
     if (!queue->head)
         queue->tail = NULL;
+    if (queue->count > 0)
+        queue->count--;
     SDL_UnlockMutex(queue->mutex);
 
     av_packet_unref(packet);
@@ -71,77 +151,6 @@ int network_pop_packet(Network *network, AVPacket *packet)
     av_packet_free(&entry->packet);
     free(entry);
     return 1;
-}
-
-static int interrupt_callback(void *opaque)
-{
-    Network *network = opaque;
-    return SDL_AtomicGet(&network->stop);
-}
-
-static int demux_thread(void *opaque)
-{
-    Network *network = opaque;
-    AVPacket *packet = av_packet_alloc();
-
-    while (!SDL_AtomicGet(&network->stop)) {
-        av_packet_unref(packet);
-        if (av_read_frame(network->format, packet) < 0) {
-            av_packet_unref(packet);
-            SDL_Delay(25);
-        } else {
-            packet_queue_push(&network->queue, packet);
-        }
-    }
-
-    av_packet_free(&packet);
-    return 0;
-}
-
-int network_open(Network *network, const char *sdp_path)
-{
-    memset(network, 0, sizeof(*network));
-    avformat_network_init();
-    network->queue.mutex = SDL_CreateMutex();
-
-    AVDictionary *options = NULL;
-    av_dict_set(&options, "protocol_whitelist", "file,udp,rtp,rtcp", 0);
-    av_dict_set(&options, "analyzeduration", "0", 0);
-    av_dict_set(&options, "probesize", "32", 0);
-    av_dict_set(&options, "fpsprobesize", "0", 0);
-    av_dict_set(&options, "buffer_size", "262144", 0);
-    av_dict_set(&options, "reorder_queue_size", "0", 0);
-    av_dict_set(&options, "timeout", "100000", 0);
-    av_dict_set(&options, "rw_timeout", "100000", 0);
-
-    int error = avformat_open_input(&network->format, sdp_path, NULL, &options);
-    av_dict_free(&options);
-    if (error < 0) {
-        av_error("Could not open SDP", error);
-        packet_queue_destroy(&network->queue);
-        avformat_network_deinit();
-        return -1;
-    }
-
-    network->format->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
-    network->format->probesize = 32;
-    network->format->max_analyze_duration = 0;
-    network->format->interrupt_callback.callback = interrupt_callback;
-    network->format->interrupt_callback.opaque = network;
-
-    av_dump_format(network->format, 0, sdp_path, 0);
-    network->video_index =
-        av_find_best_stream(network->format, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    network->audio_index =
-        av_find_best_stream(network->format, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-    return 0;
-}
-
-int network_start(Network *network)
-{
-    network->thread =
-        SDL_CreateThread(demux_thread, "RTP demux", network);
-    return network->thread ? 0 : -1;
 }
 
 void network_stop(Network *network)

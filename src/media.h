@@ -18,6 +18,19 @@ typedef struct Media {
     int sws_height;
     enum AVPixelFormat sws_format;
     SDL_AudioDeviceID audio_device;
+    SDL_mutex *audio_queue_mutex;
+    SDL_atomic_t audio_stop;
+    SDL_Thread *audio_thread;
+    struct AudioPacketEntry *audio_packets_head;
+    struct AudioPacketEntry *audio_packets_tail;
+    size_t audio_packet_count;
+    uint8_t *h264_parameter_sets;
+    size_t h264_parameter_sets_size;
+    uint8_t *h264_sps;
+    size_t h264_sps_size;
+    uint8_t *h264_pps;
+    size_t h264_pps_size;
+    int h264_ready;
 } Media;
 
 int media_init(Media *media, AVFormatContext *format,
