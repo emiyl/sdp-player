@@ -34,7 +34,8 @@ typedef struct Media {
 } Media;
 
 int media_init(Media *media, AVFormatContext *format,
-               int video_index, int audio_index);
+               int video_index, int audio_index,
+               int process_audio, int process_video);
 int media_decode_packet(Media *media, AVPacket *packet, enum AVMediaType type,
                         Gui *gui);
 void media_shutdown(Media *media);

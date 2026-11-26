@@ -9,7 +9,7 @@ typedef struct Gui {
     SDL_Texture *texture;
 } Gui;
 
-int gui_init(Gui *gui);
+int gui_init(Gui *gui, int init_audio);
 void gui_shutdown(Gui *gui);
 int gui_poll_quit(Gui *gui, int status_visible);
 void gui_draw_status(Gui *gui, const char *text);

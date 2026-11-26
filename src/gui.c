@@ -43,11 +43,14 @@ static void glyph_bounds(const struct Font *glyph, int *left, int *width)
     }
 }
 
-int gui_init(Gui *gui)
+int gui_init(Gui *gui, int init_audio)
 {
     memset(gui, 0, sizeof(*gui));
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) != 0) {
+    Uint32 init_flags = SDL_INIT_VIDEO | SDL_INIT_EVENTS;
+    if (init_audio)
+        init_flags |= SDL_INIT_AUDIO;
+    if (SDL_Init(init_flags) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return -1;
     }

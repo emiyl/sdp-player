@@ -261,12 +261,13 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
 }
 
 int media_init(Media *media, AVFormatContext *format,
-               int video_index, int audio_index)
+               int video_index, int audio_index,
+               int process_audio, int process_video)
 {
     memset(media, 0, sizeof(*media));
     media->frame = av_frame_alloc();
 
-    if (video_index >= 0) {
+    if (process_video && video_index >= 0) {
         AVCodecParameters *parameters =
             format->streams[video_index]->codecpar;
         const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
@@ -282,7 +283,7 @@ int media_init(Media *media, AVFormatContext *format,
         }
     }
 
-    if (audio_index >= 0) {
+    if (process_audio && audio_index >= 0) {
         AVCodecParameters *parameters =
             format->streams[audio_index]->codecpar;
         const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);

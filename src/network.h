@@ -33,6 +33,8 @@ extern "C" {
 #endif
 int network_open(Network *network, const char *sdp_path);
 int network_start(Network *network);
+void network_disable_audio(Network *network);
+void network_disable_video(Network *network);
 int network_pop_packet(Network *network, AVPacket *packet);
 void network_stop(Network *network);
 void network_close(Network *network);

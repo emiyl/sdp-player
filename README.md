@@ -34,6 +34,24 @@ cmake --build build
 
 ```sh
 ./build/sdp-sdl /path/to/source.sdp
+
+To receive video only:
+
+```sh
+./build/sdp-sdl --no-audio /path/to/source.sdp
+```
+
+To receive audio only:
+
+```sh
+./build/sdp-sdl --no-video /path/to/source.sdp
+```
+
+To process neither stream:
+
+```sh
+./build/sdp-sdl --no-video --no-audio /path/to/source.sdp
+```
 ```
 
 Press Escape or close the window to quit.

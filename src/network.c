@@ -130,6 +130,18 @@ int network_start(Network *network)
     return network->thread ? 0 : -1;
 }
 
+void network_disable_audio(Network *network)
+{
+    network->audio_index = -1;
+    network->has_audio = 0;
+}
+
+void network_disable_video(Network *network)
+{
+    network->video_index = -1;
+    network->has_video = 0;
+}
+
 int network_pop_packet(Network *network, AVPacket *packet)
 {
     PacketQueue *queue = &network->queue;
