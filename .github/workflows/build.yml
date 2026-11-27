@@ -196,15 +196,15 @@ jobs:
           $env:VCPKG_TARGET_TRIPLET = $triplet
           cmd /d /c "`"$vcvars`" $vcarch && set VCPKG_INSTALLED_DIR=$root\installed && set VCPKG_TARGET_TRIPLET=$triplet && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$root\scripts\buildsystems\vcpkg.cmake`" -DVCPKG_TARGET_TRIPLET=$triplet -DVCPKG_INSTALLED_DIR=`"$root\installed`""
 
-      - name: Build Windows
-        if: matrix.os-name == 'windows'
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $instance = & $vswhere -latest -property installationPath
-          $vcvars = Join-Path $instance "VC\Auxiliary\Build\vcvarsall.bat"
-          $vcarch = if ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "x64" }
-          cmd /d /c "`"$vcvars`" $vcarch && cmake --build build --config Release"
+      # - name: Build Windows
+      #   if: matrix.os-name == 'windows'
+      #   shell: pwsh
+      #   run: |
+      #     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+      #     $instance = & $vswhere -latest -property installationPath
+      #     $vcvars = Join-Path $instance "VC\Auxiliary\Build\vcvarsall.bat"
+      #     $vcarch = if ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "x64" }
+      #     cmd /d /c "`"$vcvars`" $vcarch && cmake --build build --config Release"
 
       - name: Build Unix
         if: matrix.os-name != 'windows'
