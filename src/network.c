@@ -17,6 +17,38 @@ static void av_error(const char *operation, int error)
     fprintf(stderr, "%s: %s\n", operation, buffer);
 }
 
+static void network_parse_address(Network *network, const char *sdp_path)
+{
+    strncpy(network->address, "Unknown", sizeof(network->address) - 1);
+    network->address[sizeof(network->address) - 1] = '\0';
+
+    FILE *file = fopen(sdp_path, "rb");
+    if (!file)
+        return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
+        char *connection = strstr(line, "c=IN IP4 ");
+        if (!connection)
+            connection = strstr(line, "c=IN IP6 ");
+        if (!connection)
+            continue;
+
+        char *address = connection + 9;
+        char *end = address;
+        while (*end && *end != '\r' && *end != '\n' &&
+               *end != ' ' && *end != '/' && *end != '\t')
+            end++;
+        size_t length = (size_t)(end - address);
+        if (length > 0 && length < sizeof(network->address)) {
+            memcpy(network->address, address, length);
+            network->address[length] = '\0';
+        }
+        break;
+    }
+    fclose(file);
+}
+
 static void packet_queue_destroy(PacketQueue *queue)
 {
     if (queue->mutex)
@@ -91,6 +123,7 @@ static int demux_thread(void *opaque)
 int network_open(Network *network, const char *sdp_path)
 {
     memset(network, 0, sizeof(*network));
+    network_parse_address(network, sdp_path);
     avformat_network_init();
     network->queue.mutex = SDL_CreateMutex();
 
@@ -130,6 +163,11 @@ int network_start(Network *network)
     network->thread =
         SDL_CreateThread(demux_thread, "RTP demux", network);
     return network->thread ? 0 : -1;
+}
+
+const char *network_address(const Network *network)
+{
+    return network->address[0] ? network->address : "Unknown";
 }
 
 size_t network_queue_depth(Network *network)

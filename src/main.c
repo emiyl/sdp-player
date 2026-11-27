@@ -126,8 +126,13 @@ int main(int argc, char **argv)
         if (gui_initialized)
             gui_shutdown(&gui);
         profile_finish(&profile);
+        char error_message[256];
+        snprintf(error_message, sizeof(error_message),
+                 "Network error: Could not open the SDP stream\n"
+                 "IP address: %s",
+                 network_address(&network));
         return exit_with_error(&gui, 0, process_audio, process_video,
-                               1, "Could not open the SDP stream");
+                               1, error_message);
     }
     if (!process_audio)
         network_disable_audio(&network);

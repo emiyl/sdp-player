@@ -132,27 +132,87 @@ void gui_draw_status(Gui *gui, const char *text)
     SDL_SetRenderDrawColor(gui->renderer, 235, 240, 245, 255);
 
     int scale = 3;
-    int text_width = 0;
-    for (size_t i = 0; text[i]; i++) {
-        if (text[i] == ' ') {
-            text_width += 3 * scale;
-            continue;
-        }
-        const struct Font *glyph = find_glyph(text[i]);
-        int left, width;
-        glyph_bounds(glyph, &left, &width);
-        text_width += width > 0 ? (width + 1) * scale : 0;
-    }
-    if (text_width >= scale)
-        text_width -= scale;
-
     int viewport_width, viewport_height;
     SDL_GetRendererOutputSize(gui->renderer, &viewport_width, &viewport_height);
-    int origin_x = (viewport_width - text_width) / 2;
-    int origin_y = (viewport_height - 7 * scale) / 2;
+
+    int line_width = 0;
+    int max_width = 0;
+    int line_count = 1;
+    for (const char *ch = text; *ch; ch++) {
+        if (*ch == '\r')
+            continue;
+        if (*ch == '\n') {
+            if (line_width > max_width)
+                max_width = line_width;
+            line_width = 0;
+            line_count++;
+            continue;
+        }
+        if (*ch == ' ') {
+            line_width += 3 * scale;
+            continue;
+        }
+        const struct Font *glyph = find_glyph(*ch);
+        if (!glyph)
+            continue;
+        int left, width;
+        glyph_bounds(glyph, &left, &width);
+        line_width += width > 0 ? (width + 1) * scale : 0;
+    }
+    if (line_width > max_width)
+        max_width = line_width;
+    if (max_width >= scale)
+        max_width -= scale;
+
+    int line_height = 7 * scale + scale;
+    int origin_y = (viewport_height - line_count * line_height + scale) / 2;
+    int first_line_width = 0;
+    for (const char *ch = text; *ch && *ch != '\n'; ch++) {
+        if (*ch == '\r')
+            continue;
+        if (*ch == ' ') {
+            first_line_width += 3 * scale;
+            continue;
+        }
+        const struct Font *glyph = find_glyph(*ch);
+        if (!glyph)
+            continue;
+        int left, width;
+        glyph_bounds(glyph, &left, &width);
+        first_line_width += width > 0 ? (width + 1) * scale : 0;
+    }
+    if (first_line_width >= scale)
+        first_line_width -= scale;
+    int origin_x = (viewport_width - first_line_width) / 2;
 
     for (size_t i = 0; text[i]; i++) {
         char ch = text[i];
+        if (ch == '\r')
+            continue;
+        if (ch == '\n') {
+            int next_width = 0;
+            for (const char *next = text + i + 1; *next; next++) {
+                if (*next == '\n')
+                    break;
+                if (*next == '\r')
+                    continue;
+                if (*next == ' ') {
+                    next_width += 3 * scale;
+                    continue;
+                }
+                const struct Font *glyph = find_glyph(*next);
+                if (!glyph)
+                    continue;
+                int left, width;
+                glyph_bounds(glyph, &left, &width);
+                next_width += width > 0 ? (width + 1) * scale : 0;
+            }
+            if (next_width >= scale)
+                next_width -= scale;
+            origin_x = (viewport_width - next_width) / 2;
+            origin_y += line_height;
+            continue;
+        }
         if (ch == ' ') {
             origin_x += 3 * scale;
             continue;

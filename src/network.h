@@ -20,6 +20,7 @@ typedef struct PacketQueue {
 
 typedef struct Network {
     AVFormatContext *format;
+    char address[128];
     PacketQueue queue;
     SDL_atomic_t stop;
     SDL_Thread *thread;
@@ -42,6 +43,7 @@ Uint64 network_dropped_packets(Network *network);
 void network_stop(Network *network);
 void network_close(Network *network);
 size_t network_queue_depth(Network *network);
+const char *network_address(const Network *network);
 AVPacket *network_packet_alloc(void);
 void network_packet_free(AVPacket **packet);
 void network_packet_unref(AVPacket *packet);
