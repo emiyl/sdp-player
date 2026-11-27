@@ -20,7 +20,19 @@ typedef struct PacketQueue {
 
 typedef struct Network {
     AVFormatContext *format;
+    AVFormatContext *video_format;
+    AVFormatContext *audio_format;
+    AVIOContext *sdp_io;
+    void *sdp_reader;
+    AVIOContext *video_sdp_io;
+    AVIOContext *audio_sdp_io;
+    void *video_sdp_reader;
+    void *audio_sdp_reader;
     char address[128];
+    char video_address[128];
+    char audio_address[128];
+    char video_sdp[1024];
+    char audio_sdp[1024];
     PacketQueue queue;
     SDL_atomic_t stop;
     SDL_Thread *thread;
@@ -29,6 +41,11 @@ typedef struct Network {
     int has_video;
     int has_audio;
     Uint64 dropped_packets;
+    Uint32 last_read_error_ms;
+    Uint64 video_packets_received;
+    Uint64 audio_packets_received;
+    Uint64 video_bytes_received;
+    Uint64 audio_bytes_received;
 } Network;
 
 #ifdef __cplusplus
