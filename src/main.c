@@ -7,6 +7,7 @@
 #include "media.h"
 #include "network.h"
 #include "profile.h"
+#include "logging.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -84,6 +85,9 @@ static void render_video_frame(void *userdata,
 
 int main(int argc, char **argv)
 {
+#ifdef DEBUG
+    debug_log("Revision 7 - application startup\n");
+#endif
 #ifdef __SWITCH__
     const char *sdp_path = "sdmc:/switch/sdp-player/stream.sdp";
 #else
@@ -157,6 +161,9 @@ int main(int argc, char **argv)
         return exit_with_error(&gui, 0, process_audio, process_video,
                                1, error_message);
     }
+#ifdef DEBUG
+    debug_log("network_open returned successfully\n");
+#endif
     if (!process_audio)
         network_disable_audio(&network);
     if (!process_video)
@@ -175,6 +182,9 @@ int main(int argc, char **argv)
         return exit_with_error(&gui, 0, process_audio, process_video,
                                1, "SDP contains no supported video or audio stream");
     }
+#ifdef DEBUG
+    debug_log("media_init returned successfully\n");
+#endif
     if (process_video) {
         media.video_callback = render_video_frame;
         media.video_userdata = &gui;
@@ -188,6 +198,9 @@ int main(int argc, char **argv)
         return exit_with_error(&gui, 0, process_audio, process_video,
                                1, "Could not start the RTP network stream");
     }
+#ifdef DEBUG
+    debug_log("network_start returned successfully\n");
+#endif
 
     AVPacket *packet = av_packet_alloc();
     int running = 1;

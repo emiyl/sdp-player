@@ -7,6 +7,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_compile_definitions(SDL_MAIN_HANDLED=1)
+add_compile_definitions(DEBUG=1)
 
 find_package(PkgConfig REQUIRED)
 
@@ -67,6 +68,7 @@ add_library(sdp-player-core
     src/network.c
     src/media.c
     src/profile.c
+    src/logging.c
 )
 
 target_include_directories(sdp-player-core PUBLIC

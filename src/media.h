@@ -36,6 +36,8 @@ typedef struct Media {
     uint8_t *h264_pps;
     size_t h264_pps_size;
     int h264_ready;
+    int h264_width;
+    int h264_height;
     Profile *profile;
     SdpPlayerVideoCallback video_callback;
     SdpPlayerAudioCallback audio_callback;
