@@ -796,7 +796,8 @@ static int switch2_init_video_decoder(Media *media,
                         ? (u32)media->h264_height
                         : (u32)height;
     config.tiling = ViddecTilingMode_PitchLinear;
-    config.max_sample_size = (u64)width * (u64)height * 3 / 2;
+    config.max_sample_size =
+        (u64)config.width * (u64)config.height * 3 / 2;
     if (codec_id == AV_CODEC_ID_H264) {
         config.codec_config = media->h264_parameter_sets;
         config.codec_config_size = media->h264_parameter_sets_size;
@@ -823,6 +824,8 @@ static int switch2_init_video_decoder(Media *media,
         config.width, config.height, config.codec
     );
 #endif
+    media->switch2_width = (int)config.width;
+    media->switch2_height = (int)config.height;
     media->switch2_video_decoder_open = 1;
     return 0;
 }
@@ -834,6 +837,21 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
                                  Profile *profile)
 {
     cache_h264_parameters(media, packet);
+    if (codec_id == AV_CODEC_ID_H264 &&
+        media->switch2_video_decoder_open &&
+        media->h264_width > 0 && media->h264_height > 0 &&
+        (media->h264_width != media->switch2_width ||
+         media->h264_height != media->switch2_height)) {
+#ifdef DEBUG
+        debug_log(
+            "Switch 2 H264 resolution changed: %dx%d -> %dx%d; recreating decoder\n",
+            media->switch2_width, media->switch2_height,
+            media->h264_width, media->h264_height
+        );
+#endif
+        videoDecoderClose(&media->switch2_video_decoder);
+        media->switch2_video_decoder_open = 0;
+    }
     if (switch2_init_video_decoder(media, codec_id, width, height) != 0)
         return 0;
 
