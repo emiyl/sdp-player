@@ -53,25 +53,17 @@ static void render_video_frame(void *userdata,
 
 int main(int argc, char **argv)
 {
-    const char *sdp_path = NULL;
+#ifdef __SWITCH__
+    const char *sdp_path = "sdmc:/switch/sdp-player/stream.sdp";
+#else
+    const char *sdp_path = "stream.sdp";
+#endif
     int process_audio = 1;
     int process_video = 1;
     const char *profile_path = NULL;
     Gui gui;
     memset(&gui, 0, sizeof(gui));
     int gui_initialized = 0;
-
-    if (argc < 2) {
-#ifdef __SWITCH__
-        sdp_path = "sdmc:/switch/sdp-player/stream.sdp";
-#else
-        char message[256];
-        snprintf(message, sizeof(message),
-                 "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>",
-                 argv[0]);
-        return exit_with_error(&gui, 0, process_audio, process_video, 2, message);
-#endif
-    }
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-audio") == 0)

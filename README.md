@@ -58,6 +58,9 @@ cmake --build build
 ./build/sdp-player /path/to/source.sdp
 ```
 
+With no SDP path argument, the app uses `stream.sdp` from the current directory.
+On Nintendo Switch, it uses `sdmc:/switch/sdp-player/stream.sdp`.
+
 To receive video only:
 
 ```sh
