@@ -446,8 +446,7 @@ static void packet_queue_destroy(PacketQueue *queue)
     }
 }
 
-static void packet_queue_push(PacketQueue *queue, AVPacket *packet,
-                              int audio_stream_index)
+static void packet_queue_push(PacketQueue *queue, AVPacket *packet)
 {
     PacketQueueEntry *entry = malloc(sizeof(*entry));
     if (!entry)
@@ -464,23 +463,10 @@ static void packet_queue_push(PacketQueue *queue, AVPacket *packet,
     queue->tail = entry;
     queue->count++;
     while (queue->count > 64 && queue->head) {
-        PacketQueueEntry *previous = NULL;
         PacketQueueEntry *overflow = queue->head;
-        while (overflow &&
-               overflow->packet->stream_index == audio_stream_index) {
-            previous = overflow;
-            overflow = overflow->next;
-        }
-        if (!overflow) {
-            previous = NULL;
-            overflow = queue->head;
-        }
-        if (previous)
-            previous->next = overflow->next;
-        else
-            queue->head = overflow->next;
-        if (queue->tail == overflow)
-            queue->tail = previous;
+        queue->head = overflow->next;
+        if (!queue->head)
+            queue->tail = NULL;
         queue->count--;
         queue->dropped_packets++;
         av_packet_free(&overflow->packet);
@@ -612,178 +598,71 @@ static int append_h264_parameter_sets(Network *network)
     return 1;
 }
 
+#ifdef __SWITCH__
+static void configure_udp_receive_buffer(int socket_fd)
+{
+    int requested_size = 1024 * 1024;
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF,
+               &requested_size, sizeof(requested_size));
+}
+#endif
+
 static int depacketize_h264(Network *network, AVPacket *packet)
 {
     uint8_t *payload = NULL;
     size_t payload_size = 0;
-    if (!rtp_strip_header(packet, 96, &payload, &payload_size)) {
-        network->h264_invalid_rtp_packets++;
-#ifdef DEBUG
-        if (network->h264_invalid_rtp_packets <= 64) {
-            uint16_t sequence = packet->size >= 4
-                                    ? ((uint16_t)packet->data[2] << 8) |
-                                          packet->data[3]
-                                    : 0;
-            uint32_t ssrc = packet->size >= 12
-                                ? ((uint32_t)packet->data[8] << 24) |
-                                      ((uint32_t)packet->data[9] << 16) |
-                                      ((uint32_t)packet->data[10] << 8) |
-                                      packet->data[11]
-                                : 0;
-            unsigned payload_type = packet->size >= 2
-                                        ? packet->data[1] & 0x7f
-                                        : 255;
-            debug_log(
-                "Rejected video RTP datagram: bytes=%d version=%u payload_type=%u sequence=%u ssrc=%08x\n",
-                packet->size,
-                packet->size >= 1 ? packet->data[0] >> 6 : 0,
-                payload_type, sequence, (unsigned)ssrc);
-        }
-#endif
+    if (!rtp_strip_header(packet, 96, &payload, &payload_size))
         return 0;
-    }
     if (!payload_size)
         return 0;
 
-    uint32_t rtp_ssrc =
-        ((uint32_t)packet->data[8] << 24) |
-        ((uint32_t)packet->data[9] << 16) |
-        ((uint32_t)packet->data[10] << 8) |
-        packet->data[11];
     uint32_t rtp_timestamp =
         ((uint32_t)packet->data[4] << 24) |
         ((uint32_t)packet->data[5] << 16) |
         ((uint32_t)packet->data[6] << 8) |
         packet->data[7];
-    if (network->h264_last_timestamp &&
-        rtp_timestamp != network->h264_last_timestamp)
-        network->h264_timestamp_changes++;
-    network->h264_last_timestamp = rtp_timestamp;
     uint16_t rtp_sequence =
         ((uint16_t)packet->data[2] << 8) |
         packet->data[3];
-    if (network->h264_have_last_rtp_sequence &&
-        rtp_ssrc != network->h264_last_rtp_ssrc) {
-        network->h264_have_last_rtp_sequence = 0;
-    }
-    int sequence_gap =
-        network->h264_have_last_rtp_sequence &&
-        rtp_sequence !=
-            (uint16_t)(network->h264_last_rtp_sequence + 1);
-    if (sequence_gap) {
-        network->h264_sequence_gaps++;
-        network->h264_rejected_packets++;
-#ifdef DEBUG
-        debug_log(
-            "H264 RTP sequence discontinuity: previous=%u expected=%u received=%u timestamp=%u ssrc=%08x\n",
-            (unsigned)network->h264_last_rtp_sequence,
-            (unsigned)(uint16_t)(network->h264_last_rtp_sequence + 1),
-            (unsigned)rtp_sequence, (unsigned)rtp_timestamp,
-            (unsigned)rtp_ssrc);
-#endif
-        if (network->h264_access_unit_active &&
-            rtp_timestamp == network->h264_access_unit_timestamp) {
-            network->h264_access_unit_damaged = 1;
-            network->h264_fragment_active = 0;
-        }
-    }
-    network->h264_last_rtp_sequence = rtp_sequence;
-    network->h264_last_rtp_ssrc = rtp_ssrc;
-    network->h264_have_last_rtp_sequence = 1;
-    int marker = (packet->data[1] & 0x80) != 0;
-    if (marker)
-        network->h264_marker_packets++;
-
-    if (network->h264_access_unit_active &&
-        rtp_timestamp != network->h264_access_unit_timestamp) {
-        int lost_idr = network->h264_access_unit_has_idr;
-        network->h264_fragment_size = 0;
-        network->h264_fragment_active = 0;
-        network->h264_access_unit_active = 0;
-        network->h264_access_unit_damaged = 0;
-        network->h264_access_unit_has_vcl = 0;
-        network->h264_access_unit_has_idr = 0;
-        if (lost_idr)
-            network->h264_seen_idr = 0;
-    }
-    if (!network->h264_access_unit_active) {
-        network->h264_access_unit_active = 1;
-        network->h264_access_unit_timestamp = rtp_timestamp;
-        network->h264_fragment_first_sequence = rtp_sequence;
-        network->h264_access_unit_has_idr = 0;
-    }
 
     uint8_t nal_type = payload[0] & 0x1f;
     if (nal_type >= 1 && nal_type <= 23) {
-        if (nal_type == 1 && !network->h264_seen_idr) {
-            network->h264_access_unit_damaged = 1;
-        } else {
-            if (network->h264_fragment_active) {
-                network->h264_rejected_packets++;
-                network->h264_access_unit_damaged = 1;
-            }
-            network->h264_fragment_active = 0;
-            if (nal_type == 5 &&
-                !append_h264_parameter_sets(network))
-                network->h264_access_unit_damaged = 1;
-            if (!append_annexb(network, payload[0], payload + 1,
-                               payload_size - 1))
-                network->h264_access_unit_damaged = 1;
-            if (nal_type >= 1 && nal_type <= 5)
-                network->h264_access_unit_has_vcl = 1;
-            if (nal_type == 5) {
-                network->h264_seen_idr = 1;
-                network->h264_access_unit_has_idr = 1;
-                network->h264_complete_idr_units++;
-            } else if (nal_type == 1) {
-                network->h264_complete_slice_units++;
-            }
-            if (nal_type == 7)
-                network->h264_nal_type7_count++;
-            else if (nal_type == 8)
-                network->h264_nal_type8_count++;
-        }
-    } else if (nal_type == 24) {
-        if (network->h264_fragment_active) {
-            network->h264_rejected_packets++;
-            network->h264_access_unit_damaged = 1;
-        }
+        if (nal_type == 1 && !network->h264_seen_idr)
+            return 0;
+        network->h264_fragment_size = 0;
         network->h264_fragment_active = 0;
+        network->h264_fragment_timestamp = rtp_timestamp;
+        if (nal_type == 5)
+            append_h264_parameter_sets(network);
+        if (!append_annexb(network, payload[0], payload + 1,
+                           payload_size - 1))
+            return 0;
+        if (nal_type == 5)
+            network->h264_seen_idr = 1;
+    } else if (nal_type == 24) {
+        network->h264_fragment_size = 0;
+        network->h264_fragment_active = 0;
+        network->h264_fragment_timestamp = rtp_timestamp;
         size_t offset = 1;
         while (offset < payload_size) {
-            if (offset + 2 > payload_size) {
-                network->h264_access_unit_damaged = 1;
-                break;
-            }
+            if (offset + 2 > payload_size)
+                return 0;
             uint16_t nal_size =
                 ((uint16_t)payload[offset] << 8) |
                 payload[offset + 1];
             offset += 2;
-            if (!nal_size || offset + nal_size > payload_size) {
-                network->h264_access_unit_damaged = 1;
-                break;
-            }
+            if (!nal_size || offset + nal_size > payload_size)
+                return 0;
             uint8_t stap_nal_type =
                 payload[offset] & 0x1f;
             if (stap_nal_type == 5 &&
                 !append_h264_parameter_sets(network))
-                network->h264_access_unit_damaged = 1;
+                return 0;
             if (!append_annexb(network, payload[offset],
                                payload + offset + 1, nal_size - 1))
-                network->h264_access_unit_damaged = 1;
-            if (stap_nal_type >= 1 && stap_nal_type <= 5)
-                network->h264_access_unit_has_vcl = 1;
-            if (stap_nal_type == 7)
-                network->h264_nal_type7_count++;
-            else if (stap_nal_type == 8)
-                network->h264_nal_type8_count++;
-            else if (stap_nal_type == 5) {
+                return 0;
+            if (stap_nal_type == 5)
                 network->h264_seen_idr = 1;
-                network->h264_access_unit_has_idr = 1;
-                network->h264_complete_idr_units++;
-            } else if (stap_nal_type == 1) {
-                network->h264_complete_slice_units++;
-            }
             offset += nal_size;
         }
     } else if (nal_type == 28 && payload_size >= 2) {
@@ -794,216 +673,68 @@ static int depacketize_h264(Network *network, AVPacket *packet)
             packet->data[3];
         int start = (fu_header & 0x80) != 0;
         int end = (fu_header & 0x40) != 0;
-        if (fu_nal_type == 1 && !network->h264_seen_idr) {
-            network->h264_access_unit_damaged = 1;
-        } else if (start) {
+        if (fu_nal_type == 1 && !network->h264_seen_idr)
+            return 0;
+        if (start) {
             if (network->h264_fragment_active) {
-                network->h264_rejected_packets++;
-                network->h264_access_unit_damaged = 1;
+                network->h264_fragment_size = 0;
             }
             network->h264_fragment_sequence = sequence;
             network->h264_fragment_active = 1;
-            network->h264_fu_start_count++;
             network->h264_fragment_timestamp = rtp_timestamp;
-            if (fu_nal_type == 5)
-                network->h264_access_unit_has_idr = 1;
             if (fu_nal_type == 5 &&
                 !append_h264_parameter_sets(network))
-                network->h264_access_unit_damaged = 1;
+                return 0;
             uint8_t nal_header =
                 (payload[0] & 0xe0) | fu_nal_type;
             if (!append_annexb(network, nal_header,
                                payload + 2, payload_size - 2))
-                network->h264_access_unit_damaged = 1;
-            if (fu_nal_type >= 1 && fu_nal_type <= 5)
-                network->h264_access_unit_has_vcl = 1;
+                return 0;
         } else {
             if (!network->h264_fragment_active)
-                network->h264_access_unit_damaged = 1;
+                return 0;
             else if (network->h264_fragment_timestamp != rtp_timestamp ||
                 sequence !=
                     (uint16_t)(network->h264_fragment_sequence + 1)) {
-                if (network->h264_fragment_timestamp != rtp_timestamp)
-                    network->h264_fu_lost_packets++;
-                else if (sequence ==
-                         network->h264_fragment_sequence)
-                    network->h264_fu_duplicate_packets++;
-                else
-                    network->h264_fu_out_of_order_packets++;
                 network->h264_fragment_active = 0;
-                network->h264_rejected_packets++;
-                network->h264_access_unit_damaged = 1;
+                network->h264_fragment_size = 0;
+                return 0;
             } else {
-                network->h264_fu_continuation_count++;
                 if (!append_annexb_fragment(network, payload + 2,
                                             payload_size - 2))
-                    network->h264_access_unit_damaged = 1;
+                    return 0;
             }
         }
         if (network->h264_fragment_active) {
             network->h264_fragment_sequence = sequence;
             if (end) {
-                network->h264_fu_end_count++;
                 network->h264_fragment_active = 0;
-                if (fu_nal_type == 5) {
+                if (fu_nal_type == 5)
                     network->h264_seen_idr = 1;
-                    network->h264_complete_idr_units++;
-                } else if (fu_nal_type == 1) {
-                    network->h264_complete_slice_units++;
-                }
             }
         }
     } else {
-        network->h264_access_unit_damaged = 1;
-        network->h264_rejected_packets++;
+        return 0;
     }
 
-    if (!marker)
+    if (network->h264_fragment_active)
         return 0;
-    if (network->h264_fragment_active ||
-        network->h264_access_unit_damaged ||
-        !network->h264_fragment_size ||
-        !network->h264_access_unit_has_vcl ||
-        !network->h264_seen_idr) {
-        int damaged = network->h264_fragment_active ||
-                      network->h264_access_unit_damaged;
-        int lost_idr = network->h264_access_unit_has_idr;
-        network->h264_fragment_size = 0;
-        network->h264_fragment_active = 0;
-        network->h264_access_unit_active = 0;
-        network->h264_access_unit_damaged = 0;
-        network->h264_access_unit_has_vcl = 0;
-        network->h264_access_unit_has_idr = 0;
-        if (damaged && lost_idr)
-            network->h264_seen_idr = 0;
+    if (!network->h264_fragment_size)
         return 0;
-    }
-    network->h264_assembled_units++;
     av_packet_unref(packet);
     uint8_t *data = av_malloc(network->h264_fragment_size);
     if (!data)
         return 0;
     memcpy(data, network->h264_fragment,
            network->h264_fragment_size);
-    network->h264_last_reconstructed_size =
-        network->h264_fragment_size;
-    uint32_t reconstructed_hash = 2166136261u;
-    for (size_t i = 0; i < network->h264_fragment_size; i++)
-        reconstructed_hash =
-            (reconstructed_hash ^ network->h264_fragment[i]) *
-            16777619u;
-#ifdef DEBUG
-    static Uint64 h264_access_units_logged = 0;
-    h264_access_units_logged++;
-    if (h264_access_units_logged <= 10 ||
-        h264_access_units_logged % 50 == 0) {
-        size_t nal_count = 0;
-        size_t nal_types[16] = {0};
-        size_t nal_sizes[16] = {0};
-        for (size_t i = 0; i < network->h264_fragment_size;) {
-            size_t start_code = 0;
-            if (i + 3 < network->h264_fragment_size &&
-                network->h264_fragment[i] == 0 &&
-                network->h264_fragment[i + 1] == 0 &&
-                network->h264_fragment[i + 2] == 1)
-                start_code = 3;
-            else if (i + 4 < network->h264_fragment_size &&
-                     network->h264_fragment[i] == 0 &&
-                     network->h264_fragment[i + 1] == 0 &&
-                     network->h264_fragment[i + 2] == 0 &&
-                     network->h264_fragment[i + 3] == 1)
-                start_code = 4;
-            if (!start_code)
-                break;
-            size_t nal_start = i + start_code;
-            size_t nal_end = network->h264_fragment_size;
-            for (size_t j = nal_start + 1;
-                 j + 3 < network->h264_fragment_size;
-                 j++) {
-                if (network->h264_fragment[j] == 0 &&
-                    network->h264_fragment[j + 1] == 0 &&
-                    (network->h264_fragment[j + 2] == 1 ||
-                     (network->h264_fragment[j + 2] == 0 &&
-                      j + 3 < network->h264_fragment_size &&
-                      network->h264_fragment[j + 3] == 1))) {
-                    nal_end = j;
-                    break;
-                }
-            }
-            if (nal_count < 16) {
-                nal_types[nal_count] =
-                    network->h264_fragment[nal_start] & 0x1f;
-                nal_sizes[nal_count] = nal_end - nal_start;
-            }
-            nal_count++;
-            i = nal_end;
-        }
-        debug_log(
-            "H264 access unit %llu: timestamp=%u seq=%u-%u size=%zu hash=%08x nal_count=%zu nal_types=",
-            (unsigned long long)h264_access_units_logged,
-            (unsigned)rtp_timestamp,
-            (unsigned)network->h264_fragment_first_sequence,
-            (unsigned)rtp_sequence,
-            network->h264_fragment_size,
-            (unsigned)reconstructed_hash,
-            nal_count
-        );
-        for (size_t i = 0; i < nal_count && i < 16; i++)
-            debug_log("%zu:%zu,", nal_types[i], nal_sizes[i]);
-        debug_log("\n");
-    }
-#endif
-    network->h264_last_reconstructed_hash = reconstructed_hash;
-    network->h264_last_reconstructed_first =
-        network->h264_fragment_size > 0
-            ? network->h264_fragment[0] : 0;
-    network->h264_last_reconstructed_second =
-        network->h264_fragment_size > 1
-            ? network->h264_fragment[1] : 0;
-    network->h264_last_reconstructed_third =
-        network->h264_fragment_size > 2
-            ? network->h264_fragment[2] : 0;
-    network->h264_last_reconstructed_fourth =
-        network->h264_fragment_size > 3
-            ? network->h264_fragment[3] : 0;
-    network->h264_last_reconstructed_size =
-        network->h264_fragment_size;
     av_packet_from_data(packet, data,
                         (int)network->h264_fragment_size);
     packet->pts = (int64_t)rtp_timestamp;
     packet->dts = (int64_t)rtp_timestamp;
     network->h264_fragment_size = 0;
-    network->h264_access_unit_active = 0;
-    network->h264_access_unit_damaged = 0;
-    network->h264_access_unit_has_vcl = 0;
-    network->h264_access_unit_has_idr = 0;
+    network->h264_fragment_active = 0;
     return 1;
 }
-
-#ifdef __SWITCH__
-static void configure_udp_receive_buffer(int socket_fd,
-                                         const char *stream_name)
-{
-    int requested_size = 1024 * 1024;
-    if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF,
-                   &requested_size, sizeof(requested_size)) < 0) {
-        debug_log("%s UDP receive buffer setup failed: %d (%s)\n",
-                  stream_name, errno, strerror(errno));
-        fprintf(stderr,
-                "%s UDP receive buffer setup failed: %d (%s)\n",
-                stream_name, errno, strerror(errno));
-        return;
-    }
-
-    int actual_size = 0;
-    socklen_t actual_size_length = sizeof(actual_size);
-    if (getsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF,
-                   &actual_size, &actual_size_length) == 0) {
-        debug_log("%s UDP receive buffer: requested=%d actual=%d\n",
-                  stream_name, requested_size, actual_size);
-    }
-}
-#endif
 
 static int demux_thread(void *opaque)
 {
@@ -1034,9 +765,9 @@ static int demux_thread(void *opaque)
     network->video_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     network->audio_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (network->video_socket >= 0)
-        configure_udp_receive_buffer(network->video_socket, "video");
+        configure_udp_receive_buffer(network->video_socket);
     if (network->audio_socket >= 0)
-        configure_udp_receive_buffer(network->audio_socket, "audio");
+        configure_udp_receive_buffer(network->audio_socket);
 
     struct sockaddr_in video_addr;
     memset(&video_addr, 0, sizeof(video_addr));
@@ -1077,8 +808,6 @@ static int demux_thread(void *opaque)
         { network->audio_socket, POLLIN, 0 },
     };
     AVPacket *packet = av_packet_alloc();
-    Uint32 packet_summary_ms = SDL_GetTicks();
-
     while (!SDL_AtomicGet(&network->stop)) {
         int poll_result = poll(sockets, 2, 100);
         if (poll_result > 0) {
@@ -1088,9 +817,6 @@ static int demux_thread(void *opaque)
                                           datagram, sizeof(datagram),
                                           0, NULL, NULL);
                 if (length > 0) {
-                    network->video_rtp_datagrams_received++;
-                    network->video_rtp_bytes_received +=
-                        (Uint64)length;
                     av_packet_unref(packet);
                     uint8_t *data = av_malloc((size_t)length);
                     if (data) {
@@ -1100,8 +826,7 @@ static int demux_thread(void *opaque)
                             packet->stream_index = network->video_index;
                             network->video_packets_received++;
                             network->video_bytes_received += packet->size;
-                            packet_queue_push(&network->queue, packet,
-                                              network->audio_index);
+                            packet_queue_push(&network->queue, packet);
                         }
                     }
                 }
@@ -1133,64 +858,13 @@ static int demux_thread(void *opaque)
                                 network->audio_packets_received++;
                                 network->audio_bytes_received +=
                                     packet->size;
-                                packet_queue_push(&network->queue, packet,
-                                                  network->audio_index);
+                                packet_queue_push(&network->queue, packet);
                             }
                         }
                     }
                 }
             }
         }
-#ifdef DEBUG
-        Uint32 now = SDL_GetTicks();
-        if (now - packet_summary_ms >= 1000) {
-            debug_log("RTP packet summary\n");
-            debug_log("video RTP datagrams received: %llu, bytes: %llu\n",
-                        (unsigned long long)network->video_rtp_datagrams_received,
-                        (unsigned long long)network->video_rtp_bytes_received);
-            debug_log("video access units queued: %llu, bytes: %llu\n",
-                        (unsigned long long)network->video_packets_received,
-                        (unsigned long long)network->video_bytes_received);
-            debug_log("audio packets: %llu, audio bytes: %llu\n",
-                        (unsigned long long)network->audio_packets_received,
-                        (unsigned long long)network->audio_bytes_received);
-            debug_log("packet queue: depth=%zu dropped=%llu\n",
-                        network_queue_depth(network),
-                        (unsigned long long)network_dropped_packets(network));
-            debug_log("H264 assembled units: %llu, rejected RTP packets: %llu\n",
-                        (unsigned long long)network->h264_assembled_units,
-                        (unsigned long long)network->h264_rejected_packets);
-            debug_log("H264 SPS count: %llu, PPS count: %llu\n",
-                        (unsigned long long)network->h264_nal_type7_count,
-                        (unsigned long long)network->h264_nal_type8_count);
-            debug_log("H264 FU-A start: %llu, continuation: %llu, end: %llu\n",
-                        (unsigned long long)network->h264_fu_start_count,
-                        (unsigned long long)network->h264_fu_continuation_count,
-                        (unsigned long long)network->h264_fu_end_count);
-            debug_log("H264 RTP markers: %llu, sequence gaps: %llu\n",
-                        (unsigned long long)network->h264_marker_packets,
-                        (unsigned long long)network->h264_sequence_gaps);
-            debug_log("H264 invalid RTP datagrams: %llu\n",
-                        (unsigned long long)network->h264_invalid_rtp_packets);
-            debug_log("H264 timestamp changes: %llu\n",
-                        (unsigned long long)network->h264_timestamp_changes);
-            debug_log(
-                "H264 FU-A lost: %llu, duplicate: %llu, out-of-order: %llu, complete IDR: %llu, complete slices: %llu\n",
-                (unsigned long long)network->h264_fu_lost_packets,
-                (unsigned long long)network->h264_fu_duplicate_packets,
-                (unsigned long long)network->h264_fu_out_of_order_packets,
-                (unsigned long long)network->h264_complete_idr_units,
-                (unsigned long long)network->h264_complete_slice_units);
-            debug_log("H264 last reconstructed size: %zu bytes, prefix=%02x%02x%02x%02x, hash=%08x\n",
-                        network->h264_last_reconstructed_size,
-                        network->h264_last_reconstructed_first,
-                        network->h264_last_reconstructed_second,
-                        network->h264_last_reconstructed_third,
-                        network->h264_last_reconstructed_fourth,
-                        (unsigned)network->h264_last_reconstructed_hash);
-            packet_summary_ms = now;
-        }
-#endif
     }
     av_packet_free(&packet);
     if (network->video_socket >= 0)
@@ -1266,7 +940,6 @@ static int demux_thread(void *opaque)
     }
     av_dict_free(&udp_options);
     AVPacket *packet = av_packet_alloc();
-    Uint32 packet_summary_ms = SDL_GetTicks();
     while (!SDL_AtomicGet(&network->stop)) {
         av_packet_unref(packet);
         int read_error = AVERROR(EAGAIN);
@@ -1327,22 +1000,8 @@ static int demux_thread(void *opaque)
             SDL_Delay(25);
         } else {
             packet->stream_index = packet_stream_index;
-            packet_queue_push(&network->queue, packet,
-                              network->audio_index);
+            packet_queue_push(&network->queue, packet);
         }
-#ifdef DEBUG
-        Uint32 now = SDL_GetTicks();
-        if (now - packet_summary_ms >= 1000) {
-            debug_log("RTP packet summary\n");
-            debug_log("video packets: %llu, video bytes: %llu\n",
-                        (unsigned long long)network->video_packets_received,
-                        (unsigned long long)network->video_bytes_received);
-            debug_log("audio packets: %llu, audio bytes: %llu\n",
-                        (unsigned long long)network->audio_packets_received,
-                        (unsigned long long)network->audio_bytes_received);
-            packet_summary_ms = now;
-        }
-#endif
     }
     av_packet_free(&packet);
     return 0;
@@ -1596,32 +1255,13 @@ int network_pop_packet(Network *network, AVPacket *packet)
     PacketQueue *queue = &network->queue;
     SDL_LockMutex(queue->mutex);
     PacketQueueEntry *entry = queue->head;
-    PacketQueueEntry *previous = NULL;
-    if (network->audio_index >= 0) {
-        PacketQueueEntry *candidate_previous = NULL;
-        for (PacketQueueEntry *candidate = queue->head; candidate;
-             candidate = candidate->next) {
-            if (candidate->packet->stream_index ==
-                network->audio_index) {
-                entry = candidate;
-                previous = candidate_previous;
-                break;
-            }
-            candidate_previous = candidate;
-        }
-    }
     if (!entry) {
         SDL_UnlockMutex(queue->mutex);
         return 0;
     }
-    if (previous)
-        previous->next = entry->next;
-    else
-        queue->head = entry->next;
+    queue->head = entry->next;
     if (!queue->head)
         queue->tail = NULL;
-    else if (queue->tail == entry)
-        queue->tail = previous;
     if (queue->count > 0)
         queue->count--;
     SDL_UnlockMutex(queue->mutex);

@@ -120,7 +120,6 @@ static void audio_queue_push(Media *media, AVPacket *packet)
         if (!media->audio_packets_head)
             media->audio_packets_tail = NULL;
         media->audio_packet_count--;
-        media->audio_queue_dropped_packets++;
     }
     if (media->audio_packets_tail)
         media->audio_packets_tail->next = entry;
@@ -157,13 +156,6 @@ static int audio_thread(void *opaque)
 {
     Media *media = opaque;
     AVFrame *frame = av_frame_alloc();
-    Uint32 audio_report_ms = SDL_GetTicks();
-    Uint32 audio_report_queue = media->audio_device
-        ? SDL_GetQueuedAudioSize(media->audio_device)
-        : 0;
-    Uint64 audio_bytes_queued = 0;
-    Uint64 audio_bytes_discarded = 0;
-    Uint64 audio_frames_queued = 0;
 
     while (!SDL_AtomicGet(&media->audio_stop)) {
         struct AudioPacketEntry *entry = audio_queue_pop(media);
@@ -172,22 +164,7 @@ static int audio_thread(void *opaque)
             continue;
         }
 
-        int audio_send_result =
-            avcodec_send_packet(media->audio_decoder, entry->packet);
-#ifdef DEBUG
-        static Uint64 audio_packets_logged = 0;
-        audio_packets_logged++;
-        if (audio_packets_logged == 1 ||
-            audio_packets_logged % 100 == 0) {
-            debug_log(
-                "Opus decoder packets: %llu, send result: %d, packet bytes: %d\n",
-                (unsigned long long)audio_packets_logged,
-                audio_send_result,
-                entry->packet->size
-            );
-        }
-#endif
-        if (audio_send_result >= 0) {
+        if (avcodec_send_packet(media->audio_decoder, entry->packet) >= 0) {
             while (avcodec_receive_frame(media->audio_decoder, frame) >= 0) {
                 if (media->swr) {
                     int capacity = av_rescale_rnd(
@@ -213,65 +190,15 @@ static int audio_thread(void *opaque)
                                 sizeof(int16_t) * AUDIO_MAX_QUEUE_MS / 1000u;
                             if (queued_bytes >= max_queued_bytes) {
                                 SDL_ClearQueuedAudio(media->audio_device);
-                                audio_bytes_discarded += queued_bytes;
-                                debug_log(
-                                    "SDL audio queue cap: discarded %u stale bytes (limit=%u)\n",
-                                    queued_bytes, max_queued_bytes);
                             }
                             if (SDL_QueueAudio(media->audio_device, output,
                                                (Uint32)bytes) != 0) {
                                 fprintf(stderr,
                                         "SDL_QueueAudio failed: %s\n",
                                         SDL_GetError());
-                            } else {
-                                audio_bytes_queued += bytes;
-                                audio_frames_queued++;
                             }
                             if (SDL_GetQueuedAudioSize(media->audio_device) >= 16384)
                                 SDL_PauseAudioDevice(media->audio_device, 0);
-
-                            Uint32 now = SDL_GetTicks();
-                            Uint32 elapsed_ms = now - audio_report_ms;
-                            if (elapsed_ms >= 1000) {
-                                Uint32 current_queue =
-                                    SDL_GetQueuedAudioSize(
-                                        media->audio_device);
-                                Uint64 available =
-                                    (Uint64)audio_report_queue +
-                                    audio_bytes_queued;
-                                Uint64 removed =
-                                    audio_bytes_discarded + current_queue;
-                                Uint64 consumed =
-                                    available > removed
-                                        ? available - removed
-                                        : 0;
-                                Uint64 consumed_rate =
-                                    consumed * 1000 /
-                                    elapsed_ms /
-                                    (2 * sizeof(int16_t));
-                                size_t pending_packets;
-                                Uint64 dropped_packets;
-                                SDL_LockMutex(media->audio_queue_mutex);
-                                pending_packets = media->audio_packet_count;
-                                dropped_packets =
-                                    media->audio_queue_dropped_packets;
-                                SDL_UnlockMutex(media->audio_queue_mutex);
-                                debug_log(
-                                    "Audio pacing: driver=%s frames=%llu consumed_rate=%llu Hz queued_bytes=%u pending_packets=%zu audio_queue_drops=%llu\n",
-                                    SDL_GetCurrentAudioDriver()
-                                        ? SDL_GetCurrentAudioDriver()
-                                        : "unknown",
-                                    (unsigned long long)audio_frames_queued,
-                                    (unsigned long long)consumed_rate,
-                                    current_queue,
-                                    pending_packets,
-                                    (unsigned long long)dropped_packets);
-                                audio_report_ms = now;
-                                audio_report_queue = current_queue;
-                                audio_bytes_queued = 0;
-                                audio_bytes_discarded = 0;
-                                audio_frames_queued = 0;
-                            }
                         }
                         if (media->profile)
                             profile_audio_frame(media->profile, bytes);
@@ -528,32 +455,10 @@ static void cache_h264_extradata(Media *media,
     media->h264_ready =
         media->h264_sps && media->h264_pps ? 1 : 0;
     av_free(parameters);
-#ifdef DEBUG
-    debug_log(
-        "H264 extradata cached: SPS=%s, PPS=%s, size=%d\n",
-        media->h264_sps ? "yes" : "no",
-        media->h264_pps ? "yes" : "no",
-        decoder->extradata_size
-    );
-#endif
 }
 
 static void cache_h264_parameters(Media *media, AVPacket *packet)
 {
-#ifdef DEBUG
-    static Uint64 h264_packets_logged = 0;
-    h264_packets_logged++;
-    if (h264_packets_logged == 1 ||
-        h264_packets_logged % 100 == 0) {
-        debug_log(
-            "H264 decoder input packets: %llu, bytes: %d, SPS=%s, PPS=%s\n",
-            (unsigned long long)h264_packets_logged,
-            packet->size,
-            media->h264_sps ? "yes" : "no",
-            media->h264_pps ? "yes" : "no"
-        );
-    }
-#endif
     for (size_t i = 0; i + 4 < (size_t)packet->size;) {
         size_t start_code_size = 0;
         if (packet->data[i] == 0 && packet->data[i + 1] == 0 &&
@@ -600,11 +505,6 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
                 sps_width > 0 && sps_height > 0) {
                 media->h264_width = sps_width;
                 media->h264_height = sps_height;
-#ifdef DEBUG
-                debug_log(
-                    "Decoded H264 dimensions: %dx%d\n",
-                    sps_width, sps_height);
-#endif
             }
         } else if (type == 8) {
             free(media->h264_pps);
@@ -632,13 +532,6 @@ static void cache_h264_parameters(Media *media, AVPacket *packet)
     free(media->h264_parameter_sets);
     media->h264_parameter_sets = parameters;
     media->h264_parameter_sets_size = parameter_size;
-#ifdef DEBUG
-    debug_log(
-        "H264 SPS/PPS found: SPS=%zu bytes, PPS=%zu bytes\n",
-        media->h264_sps_size,
-        media->h264_pps_size
-    );
-#endif
     if (!media->h264_ready) {
         media->h264_ready = 1;
         if (media->video_decoder)
@@ -718,17 +611,6 @@ int media_init(Media *media, AVFormatContext *format,
                 if (obtained.freq > 0)
                     media->audio_output_rate = obtained.freq;
                 SDL_PauseAudioDevice(media->audio_device, 1);
-#ifdef DEBUG
-                debug_log(
-                    "SDL audio device: requested_freq=%d obtained_freq=%d format=%u channels=%u samples=%u\n",
-                    wanted.freq, obtained.freq, (unsigned)obtained.format,
-                    (unsigned)obtained.channels,
-                    (unsigned)obtained.samples);
-                debug_log("SDL audio driver: %s\n",
-                          SDL_GetCurrentAudioDriver()
-                              ? SDL_GetCurrentAudioDriver()
-                              : "unknown");
-#endif
             } else {
                 fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n",
                         SDL_GetError());
@@ -808,22 +690,10 @@ static int switch2_init_video_decoder(Media *media,
         &config
     );
     if (R_FAILED(result)) {
-#ifdef DEBUG
-        debug_log(
-            "Switch 2 hardware decoder create failed: 0x%x\n",
-            (unsigned)result
-        );
-#endif
         fprintf(stderr, "Switch 2 hardware decoder create failed: 0x%x\n",
                 (unsigned)result);
         return -1;
     }
-#ifdef DEBUG
-    debug_log(
-        "Switch 2 hardware decoder created: %ux%u, codec=%d\n",
-        config.width, config.height, config.codec
-    );
-#endif
     media->switch2_width = (int)config.width;
     media->switch2_height = (int)config.height;
     media->switch2_video_decoder_open = 1;
@@ -842,13 +712,6 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
         media->h264_width > 0 && media->h264_height > 0 &&
         (media->h264_width != media->switch2_width ||
          media->h264_height != media->switch2_height)) {
-#ifdef DEBUG
-        debug_log(
-            "Switch 2 H264 resolution changed: %dx%d -> %dx%d; recreating decoder\n",
-            media->switch2_width, media->switch2_height,
-            media->h264_width, media->h264_height
-        );
-#endif
         videoDecoderClose(&media->switch2_video_decoder);
         media->switch2_video_decoder_open = 0;
     }
@@ -871,72 +734,23 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
             R_VALUE(result) != R_VALUE(KERNELRESULT(TimedOut)))
             break;
 
-#ifdef DEBUG
-        static Uint64 hardware_submit_busy_count = 0;
-        hardware_submit_busy_count++;
-        if (hardware_submit_busy_count == 1 ||
-            hardware_submit_busy_count % 100 == 0)
-            debug_log(
-                "Switch 2 hardware decoder waiting to submit: %llu result=0x%x\n",
-                (unsigned long long)hardware_submit_busy_count,
-                (unsigned)result
-            );
-#endif
         Result wait_result = eventWait(
             &media->switch2_video_decoder.decoder.submission_ready,
             100000000
         );
         if (R_FAILED(wait_result) &&
             R_VALUE(wait_result) != R_VALUE(KERNELRESULT(TimedOut))) {
-#ifdef DEBUG
-            debug_log(
-                "Switch 2 hardware decoder readiness wait failed: 0x%x\n",
-                (unsigned)wait_result
-            );
-#else
             fprintf(stderr,
                     "Switch 2 hardware decoder readiness wait failed: 0x%x\n",
                     (unsigned)wait_result);
-#endif
             return 0;
         }
     }
 
     if (R_FAILED(result)) {
-#ifdef DEBUG
-        debug_log(
-            "Switch 2 hardware decoder submit failed: 0x%x\n",
-            (unsigned)result
-        );
-#else
         fprintf(stderr, "Switch 2 hardware decoder submit failed: 0x%x\n",
                 (unsigned)result);
-#endif
         return 0;
-    } else {
-#ifdef DEBUG
-        static Uint64 hardware_submit_count = 0;
-        hardware_submit_count++;
-        if (hardware_submit_count == 1 ||
-            hardware_submit_count % 100 == 0)
-        {
-            uint32_t packet_hash = 2166136261u;
-            for (int i = 0; i < packet->size; i++)
-                packet_hash =
-                    (packet_hash ^ packet->data[i]) * 16777619u;
-            debug_log(
-                "Switch 2 hardware decoder submitted: packet=%llu bytes=%d pts=%lld prefix=%02x%02x%02x%02x hash=%08x\n",
-                (unsigned long long)hardware_submit_count,
-                packet->size,
-                (long long)packet->pts,
-                packet->size > 0 ? packet->data[0] : 0,
-                packet->size > 1 ? packet->data[1] : 0,
-                packet->size > 2 ? packet->data[2] : 0,
-                packet->size > 3 ? packet->data[3] : 0,
-                (unsigned)packet_hash
-            );
-        }
-#endif
     }
 
     int received_video = 0;
@@ -948,42 +762,8 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
             0
         );
         if (R_FAILED(result)) {
-#ifdef DEBUG
-            static Uint64 hardware_get_misses = 0;
-            hardware_get_misses++;
-            if (hardware_get_misses == 1 ||
-                hardware_get_misses % 100 == 0)
-                debug_log(
-                    "Switch 2 hardware decoder get frame: miss=%llu result=0x%x\n",
-                    (unsigned long long)hardware_get_misses,
-                    (unsigned)result
-                );
-#endif
             break;
         }
-#ifdef DEBUG
-        static Uint32 media_frame_summary_ms = 0;
-        static Uint64 hardware_frame_count = 0;
-        hardware_frame_count++;
-        if (!media_frame_summary_ms)
-            media_frame_summary_ms = SDL_GetTicks();
-        if (hardware_frame_count == 1 ||
-            hardware_frame_count % 100 == 0 ||
-            SDL_GetTicks() - media_frame_summary_ms >= 1000) {
-            debug_log(
-                "Switch 2 hardware decoder frame received: %llu %ux%u visible=%ux%u tiling=%u timestamp=%lld slot=%u\n",
-                (unsigned long long)hardware_frame_count,
-                frame.width,
-                frame.height,
-                frame.width,
-                frame.height,
-                (unsigned)frame.tiling,
-                (long long)frame.timestamp_ns,
-                frame.slot
-            );
-            media_frame_summary_ms = SDL_GetTicks();
-        }
-#endif
 
         uint8_t *data[4] = {0};
         int linesizes[4] = {0};
@@ -1020,15 +800,6 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
                     nv12_data[1] = copied_uv;
                     nv12_linesizes[0] = (int)frame.width;
                     nv12_linesizes[1] = (int)frame.width;
-                } else {
-#ifdef DEBUG
-                    debug_log(
-                        "Switch 2 hardware decoder copy frame failed: 0x%x %ux%u\n",
-                        (unsigned)result,
-                        frame.width,
-                        frame.height
-                    );
-#endif
                 }
             }
         }
@@ -1131,35 +902,7 @@ int media_decode_packet(Media *media, AVPacket *packet,
         av_error("Video/audio decoder rejected packet", error);
 
     int received_video = 0;
-    static Uint64 h264_send_packets = 0;
-    static Uint64 h264_receive_frames = 0;
-    if (type == AVMEDIA_TYPE_VIDEO) {
-        h264_send_packets++;
-        if (h264_send_packets == 1 ||
-            h264_send_packets % 100 == 0 ||
-            error < 0)
-            debug_log(
-                "H264 decoder send: packet=%llu bytes=%d result=%d NAL=%02x%02x%02x%02x\n",
-                (unsigned long long)h264_send_packets,
-                packet->size,
-                error,
-                packet->size > 0 ? packet->data[0] : 0,
-                packet->size > 1 ? packet->data[1] : 0,
-                packet->size > 2 ? packet->data[2] : 0,
-                packet->size > 3 ? packet->data[3] : 0);
-    }
     while (avcodec_receive_frame(decoder, media->frame) >= 0) {
-        if (type == AVMEDIA_TYPE_VIDEO) {
-            h264_receive_frames++;
-            if (h264_receive_frames == 1 ||
-                h264_receive_frames % 100 == 0)
-                debug_log(
-                    "H264 decoder receive: frame=%llu dimensions=%dx%d format=%d\n",
-                    (unsigned long long)h264_receive_frames,
-                    media->frame->width,
-                    media->frame->height,
-                    media->frame->format);
-        }
         if (type == AVMEDIA_TYPE_VIDEO) {
             if (media->frame->format == AV_PIX_FMT_YUV420P ||
                 media->frame->format == AV_PIX_FMT_YUVJ420P) {

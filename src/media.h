@@ -30,7 +30,6 @@ typedef struct Media {
     struct AudioPacketEntry *audio_packets_head;
     struct AudioPacketEntry *audio_packets_tail;
     size_t audio_packet_count;
-    Uint64 audio_queue_dropped_packets;
     uint8_t *h264_parameter_sets;
     size_t h264_parameter_sets_size;
     uint8_t *h264_sps;
