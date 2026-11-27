@@ -1,0 +1,49 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "switch1",
+      "displayName": "Nintendo Switch 1",
+      "description": "Build an NRO for Nintendo Switch using devkitPro and libnx.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-switch1",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "/opt/devkitpro/cmake/Switch.cmake"
+      },
+      "environment": {
+        "DEVKITPRO": "/opt/devkitpro",
+        "DEVKITARM": "/opt/devkitpro/devkitARM",
+        "DEVKITA64": "/opt/devkitpro/devkitA64"
+      }
+    },
+    {
+      "name": "switch2",
+      "displayName": "Nintendo Switch 2",
+      "description": "Build an NRO for Nintendo Switch 2 using ounce-devkit and libounce.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-switch2",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "/opt/devkitpro/libounce/cmake/Switch2.cmake"
+      },
+      "environment": {
+        "DEVKITPRO": "/opt/devkitpro",
+        "DEVKITARM": "/opt/devkitpro/devkitARM",
+        "DEVKITA64": "/opt/devkitpro/devkitA64"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "switch1",
+      "configurePreset": "switch1",
+      "configuration": "Release"
+    },
+    {
+      "name": "switch2",
+      "configurePreset": "switch2",
+      "configuration": "Release"
+    }
+  ]
+}

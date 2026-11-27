@@ -87,6 +87,30 @@ Without `--profile`, the app creates a timestamped
 
 Press Escape or close the window to quit.
 
+## Nintendo Switch
+
+Cross-builds use the devkitPro Nintendo Switch and ounce-devkit Switch 2
+toolchains.
+
+Switch 1:
+
+```sh
+cmake --preset switch1
+cmake --build --preset switch1
+```
+
+Switch 2:
+
+```sh
+cmake --preset switch2
+cmake --build --preset switch2
+```
+
+Both builds produce an NRO. On launch, if no SDP argument is supplied, the
+player reads `sdmc:/switch/sdp-player/stream.sdp`. Switch 2 uses libounce's
+native GSV1 hardware decoder for H.264, VP9, and AV1 video; Switch 1 uses the
+portlib FFmpeg software decoder (or any hardware decoder added by the portlib).
+
 Audio playback uses SDL queued audio with a bounded 64 KB queue and a 16 KB
 prebuffer. This prevents callback underruns and limits audio/video backlog.
 

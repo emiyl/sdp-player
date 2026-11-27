@@ -287,6 +287,18 @@ int media_init(Media *media, AVFormatContext *format,
     if (process_video && video_index >= 0) {
         AVCodecParameters *parameters =
             format->streams[video_index]->codecpar;
+#ifdef __SWITCH2__
+        if (parameters->codec_id == AV_CODEC_ID_H264 ||
+            parameters->codec_id == AV_CODEC_ID_VP9 ||
+            parameters->codec_id == AV_CODEC_ID_AV1) {
+            media->switch2_video_decoder_open = 0;
+            media->switch2_codec_id = parameters->codec_id;
+            media->switch2_width = parameters->width;
+            media->switch2_height = parameters->height;
+            media->video_decoder = NULL;
+        } else
+#endif
+        {
         const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
         if (codec) {
             media->video_decoder = avcodec_alloc_context3(codec);
@@ -297,6 +309,7 @@ int media_init(Media *media, AVFormatContext *format,
             if (avcodec_open2(media->video_decoder, codec, NULL) < 0) {
                 avcodec_free_context(&media->video_decoder);
             }
+        }
         }
     }
 
@@ -351,8 +364,151 @@ int media_init(Media *media, AVFormatContext *format,
             SDL_CreateThread(audio_thread, "RTP audio", media);
     }
 
-    return media->video_decoder || media->audio_decoder ? 0 : -1;
+    return media->video_decoder || media->audio_decoder
+#ifdef __SWITCH2__
+           || process_video
+#endif
+           ? 0 : -1;
 }
+
+#ifdef __SWITCH2__
+static ViddecCodec switch2_codec(enum AVCodecID codec_id)
+{
+    if (codec_id == AV_CODEC_ID_VP9)
+        return ViddecCodec_Vp9;
+    if (codec_id == AV_CODEC_ID_AV1)
+        return ViddecCodec_Av1;
+    return ViddecCodec_H264;
+}
+
+static int switch2_init_video_decoder(Media *media,
+                                      enum AVCodecID codec_id,
+                                      int width,
+                                      int height)
+{
+    if (media->switch2_video_decoder_open)
+        return 0;
+    if (codec_id == AV_CODEC_ID_H264 &&
+        (!media->h264_ready || !media->h264_parameter_sets))
+        return -1;
+
+    VideoDecoderConfig config = {0};
+    config.codec = switch2_codec(codec_id);
+    config.width = (u32)width;
+    config.height = (u32)height;
+    config.tiling = ViddecTilingMode_PitchLinear;
+    config.max_sample_size = (u64)width * (u64)height * 3 / 2;
+    if (codec_id == AV_CODEC_ID_H264) {
+        config.codec_config = media->h264_parameter_sets;
+        config.codec_config_size = media->h264_parameter_sets_size;
+    }
+
+    Result result = videoDecoderCreate(
+        &media->switch2_video_decoder,
+        &config
+    );
+    if (R_FAILED(result)) {
+        fprintf(stderr, "Switch 2 hardware decoder create failed: 0x%x\n",
+                (unsigned)result);
+        return -1;
+    }
+    media->switch2_video_decoder_open = 1;
+    return 0;
+}
+
+static int switch2_decode_packet(Media *media, AVPacket *packet,
+                                 enum AVCodecID codec_id,
+                                 int width,
+                                 int height,
+                                 Profile *profile)
+{
+    cache_h264_parameters(media, packet);
+    if (switch2_init_video_decoder(media, codec_id, width, height) != 0)
+        return 0;
+
+    s64 timestamp_ns = (s64)SDL_GetPerformanceCounter() * 1000000000 /
+                       (s64)SDL_GetPerformanceFrequency();
+    Result result = videoDecoderSubmit(
+        &media->switch2_video_decoder,
+        packet->data,
+        packet->size,
+        timestamp_ns,
+        false,
+        1000000
+    );
+    if (R_FAILED(result) && result != VIDDEC_RESULT_SUBMIT_BUSY)
+        fprintf(stderr, "Switch 2 hardware decoder submit failed: 0x%x\n",
+                (unsigned)result);
+
+    int received_video = 0;
+    for (;;) {
+        VideoFrame frame;
+        result = videoDecoderGetFrame(
+            &media->switch2_video_decoder,
+            &frame,
+            0
+        );
+        if (R_FAILED(result))
+            break;
+
+        uint8_t *data[4] = {0};
+        int linesizes[4] = {0};
+        av_image_alloc(data, linesizes,
+                       frame.width, frame.height,
+                       AV_PIX_FMT_YUV420P, 1);
+        size_t y_size = (size_t)frame.width * frame.height;
+        size_t uv_size = y_size / 2;
+        uint8_t *y = malloc(y_size);
+        uint8_t *uv = malloc(uv_size);
+        if (y && uv) {
+            result = videoDecoderCopyFrame(
+                &media->switch2_video_decoder,
+                &frame,
+                y,
+                frame.width,
+                uv,
+                frame.width
+            );
+        } else {
+            result = MAKERESULT(1, 1);
+        }
+        if (R_SUCCEEDED(result) && y && uv) {
+            const uint8_t *nv12_data[2] = { y, uv };
+            int nv12_linesizes[2] = { (int)frame.width, (int)frame.width };
+            sws_freeContext(media->sws);
+            media->sws = sws_getContext(
+                frame.width, frame.height,
+                AV_PIX_FMT_NV12,
+                frame.width, frame.height,
+                AV_PIX_FMT_YUV420P,
+                SWS_FAST_BILINEAR, NULL, NULL, NULL
+            );
+            sws_scale(media->sws,
+                      nv12_data, nv12_linesizes,
+                      0, frame.height,
+                      data, linesizes);
+            if (media->video_callback) {
+                SdpPlayerVideoFrame output = {0};
+                for (int i = 0; i < 4; i++) {
+                    output.planes[i] = data[i];
+                    output.linesizes[i] = linesizes[i];
+                }
+                output.width = frame.width;
+                output.height = frame.height;
+                media->video_callback(media->video_userdata, &output);
+            }
+            if (profile)
+                profile_video_frame(profile, 0, 0);
+            received_video = 1;
+        }
+        free(y);
+        free(uv);
+        av_freep(&data[0]);
+        videoDecoderReleaseFrame(&media->switch2_video_decoder, &frame);
+    }
+    return received_video;
+}
+#endif
 
 int media_decode_packet(Media *media, AVPacket *packet,
                         enum AVMediaType type, Profile *profile)
@@ -362,6 +518,20 @@ int media_decode_packet(Media *media, AVPacket *packet,
             audio_queue_push(media, packet);
         return 0;
     }
+
+#ifdef __SWITCH2__
+    if (type == AVMEDIA_TYPE_VIDEO &&
+        media->switch2_codec_id != AV_CODEC_ID_NONE) {
+        return switch2_decode_packet(
+            media,
+            packet,
+            media->switch2_codec_id,
+            media->switch2_width,
+            media->switch2_height,
+            profile
+        );
+    }
+#endif
 
     AVCodecContext *decoder =
         type == AVMEDIA_TYPE_VIDEO ? media->video_decoder : NULL;
@@ -462,6 +632,12 @@ int media_decode_packet(Media *media, AVPacket *packet,
 
 void media_shutdown(Media *media)
 {
+#ifdef __SWITCH2__
+    if (media->switch2_video_decoder_open) {
+        videoDecoderClose(&media->switch2_video_decoder);
+        media->switch2_video_decoder_open = 0;
+    }
+#endif
     if (media->audio_thread) {
         SDL_AtomicSet(&media->audio_stop, 1);
         SDL_WaitThread(media->audio_thread, NULL);

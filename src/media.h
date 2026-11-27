@@ -9,6 +9,10 @@
 #include "sdp_player.h"
 #include "profile.h"
 
+#ifdef __SWITCH2__
+#include <switch.h>
+#endif
+
 typedef struct Media {
     AVCodecContext *video_decoder;
     AVCodecContext *audio_decoder;
@@ -37,6 +41,13 @@ typedef struct Media {
     SdpPlayerAudioCallback audio_callback;
     void *video_userdata;
     void *audio_userdata;
+#ifdef __SWITCH2__
+    VideoDecoder switch2_video_decoder;
+    int switch2_video_decoder_open;
+    enum AVCodecID switch2_codec_id;
+    int switch2_width;
+    int switch2_height;
+#endif
 } Media;
 
 int media_init(Media *media, AVFormatContext *format,

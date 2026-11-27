@@ -11,6 +11,33 @@
 #include <stdio.h>
 #include <string.h>
 
+static int exit_with_error(Gui *gui, int gui_initialized,
+                           int process_audio, int process_video,
+                           int exit_code, const char *message)
+{
+    fprintf(stderr, "%s\n", message);
+
+    if (process_video && !gui_initialized)
+        gui_initialized = gui_init(gui, process_audio) == 0;
+
+    if (gui_initialized)
+        gui_draw_status(gui, message);
+
+    Uint32 start = SDL_GetTicks();
+    while (SDL_GetTicks() - start < 5000) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+            (void)event;
+        SDL_Delay(10);
+    }
+
+    if (gui_initialized)
+        gui_shutdown(gui);
+    else
+        SDL_Quit();
+    return exit_code;
+}
+
 static void render_video_frame(void *userdata,
                                const SdpPlayerVideoFrame *frame)
 {
@@ -30,12 +57,20 @@ int main(int argc, char **argv)
     int process_audio = 1;
     int process_video = 1;
     const char *profile_path = NULL;
+    Gui gui;
+    memset(&gui, 0, sizeof(gui));
+    int gui_initialized = 0;
 
     if (argc < 2) {
-        fprintf(stderr,
-                "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
-                argv[0]);
-        return 2;
+#ifdef __SWITCH__
+        sdp_path = "sdmc:/switch/sdp-player/stream.sdp";
+#else
+        char message[256];
+        snprintf(message, sizeof(message),
+                 "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>",
+                 argv[0]);
+        return exit_with_error(&gui, 0, process_audio, process_video, 2, message);
+#endif
     }
 
     for (int i = 1; i < argc; i++) {
@@ -45,10 +80,11 @@ int main(int argc, char **argv)
             process_video = 0;
         else if (strcmp(argv[i], "--profile") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr,
-                        "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
-                        argv[0]);
-                return 2;
+                char message[256];
+                snprintf(message, sizeof(message),
+                         "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>",
+                         argv[0]);
+                return exit_with_error(&gui, 0, process_audio, process_video, 2, message);
             }
             profile_path = argv[++i];
         }
@@ -56,33 +92,42 @@ int main(int argc, char **argv)
             sdp_path = argv[i];
     }
     if (!sdp_path) {
-        fprintf(stderr,
-                "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>\n",
-                argv[0]);
-        return 2;
+        char message[256];
+        snprintf(message, sizeof(message),
+                 "Usage: %s [--no-video] [--no-audio] [--profile <path>] <file.sdp>",
+                 argv[0]);
+        return exit_with_error(&gui, 0, process_audio, process_video, 2, message);
     }
 
-    Gui gui;
-    memset(&gui, 0, sizeof(gui));
-    if (process_video && gui_init(&gui, process_audio) != 0)
-        return 1;
+    if (process_video) {
+        gui_initialized = gui_init(&gui, process_audio) == 0;
+        if (!gui_initialized)
+            return exit_with_error(&gui, 0, process_audio, process_video,
+                                   1, "Could not initialize the player display");
+    }
     if (!process_video &&
         SDL_Init(process_audio ? SDL_INIT_AUDIO | SDL_INIT_EVENTS
                                : SDL_INIT_EVENTS) != 0) {
-        fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-        return 1;
+        char message[256];
+        snprintf(message, sizeof(message), "SDL_Init failed: %s", SDL_GetError());
+        return exit_with_error(&gui, 0, process_audio, process_video, 1, message);
     }
 
     Profile profile;
     if (profile_init(&profile, profile_path) != 0) {
-        fprintf(stderr, "Could not create performance profile log\n");
-        return 1;
+        if (gui_initialized)
+            gui_shutdown(&gui);
+        return exit_with_error(&gui, 0, process_audio, process_video,
+                               1, "Could not create performance profile log");
     }
 
     Network network;
     if (network_open(&network, sdp_path) != 0) {
-        gui_shutdown(&gui);
-        return 1;
+        if (gui_initialized)
+            gui_shutdown(&gui);
+        profile_finish(&profile);
+        return exit_with_error(&gui, 0, process_audio, process_video,
+                               1, "Could not open the SDP stream");
     }
     if (!process_audio)
         network_disable_audio(&network);
@@ -94,8 +139,14 @@ int main(int argc, char **argv)
     if (media_init(&media, network.format,
                    network.video_index,
                    process_audio ? network.audio_index : -1,
-                   process_audio, process_video) != 0)
-        fprintf(stderr, "SDP contains no supported video or audio stream\n");
+                   process_audio, process_video) != 0) {
+        network_close(&network);
+        profile_finish(&profile);
+        if (gui_initialized)
+            gui_shutdown(&gui);
+        return exit_with_error(&gui, 0, process_audio, process_video,
+                               1, "SDP contains no supported video or audio stream");
+    }
     if (process_video) {
         media.video_callback = render_video_frame;
         media.video_userdata = &gui;
@@ -103,8 +154,11 @@ int main(int argc, char **argv)
     if (network_start(&network) != 0) {
         media_shutdown(&media);
         network_close(&network);
-        gui_shutdown(&gui);
-        return 1;
+        profile_finish(&profile);
+        if (gui_initialized)
+            gui_shutdown(&gui);
+        return exit_with_error(&gui, 0, process_audio, process_video,
+                               1, "Could not start the RTP network stream");
     }
 
     AVPacket *packet = av_packet_alloc();

@@ -12,7 +12,26 @@ find_package(PkgConfig REQUIRED)
 
 set(ENV{PKG_CONFIG_ARGN} "--static")
 
-if(NOT WIN32)
+if(NINTENDO_SWITCH)
+    if(NINTENDO_SWITCH2)
+        set(SDP_SWITCH_MEDIA_PREFIX "${DEVKITPRO}/portlibs/switch")
+        include_directories(SYSTEM
+            "${DEVKITPRO}/portlibs/switch/include"
+            "${DEVKITPRO}/portlibs/switch/include/SDL2"
+        )
+        link_directories("${DEVKITPRO}/portlibs/switch/lib")
+        set(SDL2_LINK_LIBRARIES SDL2 nx)
+        set(LIBAVFORMAT_LINK_LIBRARIES avformat avcodec avutil swscale swresample)
+    else()
+        set(SDP_SWITCH_MEDIA_PREFIX "${DEVKITPRO}/portlibs/switch")
+        pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+        pkg_check_modules(LIBAVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+        pkg_check_modules(LIBAVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+        pkg_check_modules(LIBAVUTIL REQUIRED IMPORTED_TARGET libavutil)
+        pkg_check_modules(LIBSWSCALE REQUIRED IMPORTED_TARGET libswscale)
+        pkg_check_modules(LIBSWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+    endif()
+elseif(NOT WIN32)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
     pkg_check_modules(LIBAVFORMAT REQUIRED IMPORTED_TARGET libavformat)
     pkg_check_modules(LIBAVCODEC REQUIRED IMPORTED_TARGET libavcodec)
@@ -63,23 +82,28 @@ target_include_directories(sdp-player-core PUBLIC
     ${LIBSWRESAMPLE_INCLUDE_DIRS}
 )
 
-if(WIN32)
+if(NINTENDO_SWITCH)
+    if(NINTENDO_SWITCH2)
+        target_link_libraries(sdp-player-core PUBLIC
+            SDL2 EGL stdc++ glapi drm_nouveau
+            bz2 z dav1d
+            avformat avcodec avutil swscale swresample
+        )
+    else()
+        target_link_libraries(sdp-player-core PUBLIC
+            PkgConfig::SDL2
+            PkgConfig::LIBAVFORMAT
+            PkgConfig::LIBAVCODEC
+            PkgConfig::LIBAVUTIL
+            PkgConfig::LIBSWSCALE
+            PkgConfig::LIBSWRESAMPLE
+        )
+    endif()
+elseif(WIN32)
     target_link_libraries(sdp-player-core PUBLIC
         SDL2::SDL2-static
-        avformat
-        avcodec
-        avutil
-        swscale
-        swresample
-        mf
-        mfplat
-        mfuuid
-        mfreadwrite
-        secur32
-        bcrypt
-        shlwapi
-        strmiids
-        ws2_32
+        avformat avcodec avutil swscale swresample
+        mf mfplat mfuuid mfreadwrite secur32 bcrypt shlwapi strmiids ws2_32
     )
 else()
     target_link_libraries(sdp-player-core PUBLIC
@@ -104,6 +128,18 @@ target_include_directories(sdp-player PRIVATE
 target_link_libraries(sdp-player PRIVATE
     sdp-player-core
 )
+
+if(NINTENDO_SWITCH AND NINTENDO_SWITCH2)
+    target_link_libraries(sdp-player PRIVATE
+        avformat avcodec avutil swscale swresample
+        dav1d bz2 z
+        EGL stdc++ glapi drm_nouveau
+    )
+endif()
+
+if(NINTENDO_SWITCH)
+    nx_create_nro(sdp-player)
+endif()
 
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
