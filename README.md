@@ -60,6 +60,8 @@ cmake --build build
 
 With no SDP path argument, the app uses `stream.sdp` from the current directory.
 On Nintendo Switch, it uses `sdmc:/switch/sdp-player/stream.sdp`.
+If that default file is absent, the app falls back to the built-in SDP settings:
+multicast `239.255.0.1`, video port `5004`, and audio port `5006`.
 
 To receive video only:
 
