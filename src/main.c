@@ -11,6 +11,53 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef __SWITCH__
+#include <switch.h>
+static PadState switch_pad;
+static int switch_pad_initialized;
+
+static int quit_requested(void)
+{
+    static Uint32 held_since = 0;
+
+    if (!switch_pad_initialized) {
+        (void)hidInitialize();
+        u32 style_set =
+            HidNpadStyleSet_NpadStandard |
+            HidNpadStyleTag_NpadSystem |
+            HidNpadStyleTag_NpadSystemExt;
+        padConfigureInput(8, style_set);
+        padInitializeAny(&switch_pad);
+        switch_pad_initialized = 1;
+    }
+
+    padUpdate(&switch_pad);
+    u64 buttons = padGetButtons(&switch_pad);
+    u64 quit_buttons =
+        HidNpadButton_Plus |
+        HidNpadButton_Minus;
+
+    int quit_buttons_pressed =
+        (buttons & quit_buttons) == quit_buttons;
+
+    if (quit_buttons_pressed) {
+        Uint32 now = SDL_GetTicks();
+        if (!held_since)
+            held_since = now;
+        if (now - held_since >= 2000)
+            return 1;
+    } else {
+        held_since = 0;
+    }
+    return 0;
+}
+#else
+static int quit_requested(void)
+{
+    return 0;
+}
+#endif
+
 static int exit_with_error(Gui *gui, int gui_initialized,
                            int process_audio, int process_video,
                            int exit_code, const char *message)
@@ -28,6 +75,8 @@ static int exit_with_error(Gui *gui, int gui_initialized,
         SDL_Event event;
         while (SDL_PollEvent(&event))
             (void)event;
+        if (quit_requested())
+            break;
         SDL_Delay(10);
     }
 
@@ -166,6 +215,8 @@ int main(int argc, char **argv)
     Uint32 last_packet_ms = SDL_GetTicks();
 
     while (running) {
+        if (quit_requested())
+            break;
         if (process_video) {
             int gui_event = gui_poll_quit(&gui, !video_received);
             if (gui_event == 1) {
