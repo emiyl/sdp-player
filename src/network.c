@@ -4,6 +4,7 @@
 
 #include <libavutil/error.h>
 #include <libavutil/base64.h>
+#include <libavutil/channel_layout.h>
 #include <libavutil/log.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -296,6 +297,9 @@ static int network_parse_media(Network *network, const char *sdp_path)
                 if (stream) {
                     stream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
                     stream->codecpar->codec_id = AV_CODEC_ID_OPUS;
+                    stream->codecpar->sample_rate = 48000;
+                    av_channel_layout_default(
+                        &stream->codecpar->ch_layout, 2);
                     network->audio_index = (int)stream->index;
                 }
                 snprintf(network->audio_address,
@@ -442,7 +446,8 @@ static void packet_queue_destroy(PacketQueue *queue)
     }
 }
 
-static void packet_queue_push(PacketQueue *queue, AVPacket *packet)
+static void packet_queue_push(PacketQueue *queue, AVPacket *packet,
+                              int audio_stream_index)
 {
     PacketQueueEntry *entry = malloc(sizeof(*entry));
     if (!entry)
@@ -459,10 +464,23 @@ static void packet_queue_push(PacketQueue *queue, AVPacket *packet)
     queue->tail = entry;
     queue->count++;
     while (queue->count > 64 && queue->head) {
+        PacketQueueEntry *previous = NULL;
         PacketQueueEntry *overflow = queue->head;
-        queue->head = overflow->next;
-        if (!queue->head)
-            queue->tail = NULL;
+        while (overflow &&
+               overflow->packet->stream_index == audio_stream_index) {
+            previous = overflow;
+            overflow = overflow->next;
+        }
+        if (!overflow) {
+            previous = NULL;
+            overflow = queue->head;
+        }
+        if (previous)
+            previous->next = overflow->next;
+        else
+            queue->head = overflow->next;
+        if (queue->tail == overflow)
+            queue->tail = previous;
         queue->count--;
         queue->dropped_packets++;
         av_packet_free(&overflow->packet);
@@ -1082,7 +1100,8 @@ static int demux_thread(void *opaque)
                             packet->stream_index = network->video_index;
                             network->video_packets_received++;
                             network->video_bytes_received += packet->size;
-                            packet_queue_push(&network->queue, packet);
+                            packet_queue_push(&network->queue, packet,
+                                              network->audio_index);
                         }
                     }
                 }
@@ -1114,8 +1133,8 @@ static int demux_thread(void *opaque)
                                 network->audio_packets_received++;
                                 network->audio_bytes_received +=
                                     packet->size;
-                                packet_queue_push(&network->queue,
-                                                  packet);
+                                packet_queue_push(&network->queue, packet,
+                                                  network->audio_index);
                             }
                         }
                     }
@@ -1135,6 +1154,9 @@ static int demux_thread(void *opaque)
             debug_log("audio packets: %llu, audio bytes: %llu\n",
                         (unsigned long long)network->audio_packets_received,
                         (unsigned long long)network->audio_bytes_received);
+            debug_log("packet queue: depth=%zu dropped=%llu\n",
+                        network_queue_depth(network),
+                        (unsigned long long)network_dropped_packets(network));
             debug_log("H264 assembled units: %llu, rejected RTP packets: %llu\n",
                         (unsigned long long)network->h264_assembled_units,
                         (unsigned long long)network->h264_rejected_packets);
@@ -1305,7 +1327,8 @@ static int demux_thread(void *opaque)
             SDL_Delay(25);
         } else {
             packet->stream_index = packet_stream_index;
-            packet_queue_push(&network->queue, packet);
+            packet_queue_push(&network->queue, packet,
+                              network->audio_index);
         }
 #ifdef DEBUG
         Uint32 now = SDL_GetTicks();
@@ -1573,13 +1596,32 @@ int network_pop_packet(Network *network, AVPacket *packet)
     PacketQueue *queue = &network->queue;
     SDL_LockMutex(queue->mutex);
     PacketQueueEntry *entry = queue->head;
+    PacketQueueEntry *previous = NULL;
+    if (network->audio_index >= 0) {
+        PacketQueueEntry *candidate_previous = NULL;
+        for (PacketQueueEntry *candidate = queue->head; candidate;
+             candidate = candidate->next) {
+            if (candidate->packet->stream_index ==
+                network->audio_index) {
+                entry = candidate;
+                previous = candidate_previous;
+                break;
+            }
+            candidate_previous = candidate;
+        }
+    }
     if (!entry) {
         SDL_UnlockMutex(queue->mutex);
         return 0;
     }
-    queue->head = entry->next;
+    if (previous)
+        previous->next = entry->next;
+    else
+        queue->head = entry->next;
     if (!queue->head)
         queue->tail = NULL;
+    else if (queue->tail == entry)
+        queue->tail = previous;
     if (queue->count > 0)
         queue->count--;
     SDL_UnlockMutex(queue->mutex);

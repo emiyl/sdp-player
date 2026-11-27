@@ -23,12 +23,14 @@ typedef struct Media {
     int sws_height;
     enum AVPixelFormat sws_format;
     SDL_AudioDeviceID audio_device;
+    int audio_output_rate;
     SDL_mutex *audio_queue_mutex;
     SDL_atomic_t audio_stop;
     SDL_Thread *audio_thread;
     struct AudioPacketEntry *audio_packets_head;
     struct AudioPacketEntry *audio_packets_tail;
     size_t audio_packet_count;
+    Uint64 audio_queue_dropped_packets;
     uint8_t *h264_parameter_sets;
     size_t h264_parameter_sets_size;
     uint8_t *h264_sps;

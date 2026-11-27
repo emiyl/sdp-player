@@ -13,6 +13,7 @@
 
 #define AUDIO_RING_SIZE (64 * 1024)
 #define AUDIO_PREBUFFER_BYTES (16 * 1024)
+#define AUDIO_MAX_QUEUE_MS 200
 
 typedef struct AudioRing {
     unsigned char data[AUDIO_RING_SIZE];
@@ -119,6 +120,7 @@ static void audio_queue_push(Media *media, AVPacket *packet)
         if (!media->audio_packets_head)
             media->audio_packets_tail = NULL;
         media->audio_packet_count--;
+        media->audio_queue_dropped_packets++;
     }
     if (media->audio_packets_tail)
         media->audio_packets_tail->next = entry;
@@ -155,6 +157,13 @@ static int audio_thread(void *opaque)
 {
     Media *media = opaque;
     AVFrame *frame = av_frame_alloc();
+    Uint32 audio_report_ms = SDL_GetTicks();
+    Uint32 audio_report_queue = media->audio_device
+        ? SDL_GetQueuedAudioSize(media->audio_device)
+        : 0;
+    Uint64 audio_bytes_queued = 0;
+    Uint64 audio_bytes_discarded = 0;
+    Uint64 audio_frames_queued = 0;
 
     while (!SDL_AtomicGet(&media->audio_stop)) {
         struct AudioPacketEntry *entry = audio_queue_pop(media);
@@ -180,16 +189,9 @@ static int audio_thread(void *opaque)
 #endif
         if (audio_send_result >= 0) {
             while (avcodec_receive_frame(media->audio_decoder, frame) >= 0) {
-                if (media->audio_device) {
-                    debug_log(
-                        "Opus decoder frame: samples=%d, sample_rate=%d, queued_bytes=%u\n",
-                        frame->nb_samples,
-                        frame->sample_rate,
-                        (unsigned)SDL_GetQueuedAudioSize(media->audio_device));
-                }
                 if (media->swr) {
                     int capacity = av_rescale_rnd(
-                        frame->nb_samples, 48000,
+                        frame->nb_samples, media->audio_output_rate,
                         frame->sample_rate, AV_ROUND_UP
                     ) + 32;
                     uint8_t *output = NULL;
@@ -204,12 +206,72 @@ static int audio_thread(void *opaque)
                         size_t bytes =
                             (size_t)converted * 2 * sizeof(int16_t);
                         if (media->audio_device) {
-                            if (SDL_GetQueuedAudioSize(media->audio_device) < 32768) {
-                                SDL_QueueAudio(media->audio_device, output,
-                                               (Uint32)bytes);
+                            Uint32 queued_bytes =
+                                SDL_GetQueuedAudioSize(media->audio_device);
+                            Uint32 max_queued_bytes =
+                                (Uint32)media->audio_output_rate * 2u *
+                                sizeof(int16_t) * AUDIO_MAX_QUEUE_MS / 1000u;
+                            if (queued_bytes >= max_queued_bytes) {
+                                SDL_ClearQueuedAudio(media->audio_device);
+                                audio_bytes_discarded += queued_bytes;
+                                debug_log(
+                                    "SDL audio queue cap: discarded %u stale bytes (limit=%u)\n",
+                                    queued_bytes, max_queued_bytes);
+                            }
+                            if (SDL_QueueAudio(media->audio_device, output,
+                                               (Uint32)bytes) != 0) {
+                                fprintf(stderr,
+                                        "SDL_QueueAudio failed: %s\n",
+                                        SDL_GetError());
+                            } else {
+                                audio_bytes_queued += bytes;
+                                audio_frames_queued++;
                             }
                             if (SDL_GetQueuedAudioSize(media->audio_device) >= 16384)
                                 SDL_PauseAudioDevice(media->audio_device, 0);
+
+                            Uint32 now = SDL_GetTicks();
+                            Uint32 elapsed_ms = now - audio_report_ms;
+                            if (elapsed_ms >= 1000) {
+                                Uint32 current_queue =
+                                    SDL_GetQueuedAudioSize(
+                                        media->audio_device);
+                                Uint64 available =
+                                    (Uint64)audio_report_queue +
+                                    audio_bytes_queued;
+                                Uint64 removed =
+                                    audio_bytes_discarded + current_queue;
+                                Uint64 consumed =
+                                    available > removed
+                                        ? available - removed
+                                        : 0;
+                                Uint64 consumed_rate =
+                                    consumed * 1000 /
+                                    elapsed_ms /
+                                    (2 * sizeof(int16_t));
+                                size_t pending_packets;
+                                Uint64 dropped_packets;
+                                SDL_LockMutex(media->audio_queue_mutex);
+                                pending_packets = media->audio_packet_count;
+                                dropped_packets =
+                                    media->audio_queue_dropped_packets;
+                                SDL_UnlockMutex(media->audio_queue_mutex);
+                                debug_log(
+                                    "Audio pacing: driver=%s frames=%llu consumed_rate=%llu Hz queued_bytes=%u pending_packets=%zu audio_queue_drops=%llu\n",
+                                    SDL_GetCurrentAudioDriver()
+                                        ? SDL_GetCurrentAudioDriver()
+                                        : "unknown",
+                                    (unsigned long long)audio_frames_queued,
+                                    (unsigned long long)consumed_rate,
+                                    current_queue,
+                                    pending_packets,
+                                    (unsigned long long)dropped_packets);
+                                audio_report_ms = now;
+                                audio_report_queue = current_queue;
+                                audio_bytes_queued = 0;
+                                audio_bytes_discarded = 0;
+                                audio_frames_queued = 0;
+                            }
                         }
                         if (media->profile)
                             profile_audio_frame(media->profile, bytes);
@@ -623,6 +685,7 @@ int media_init(Media *media, AVFormatContext *format,
     }
 
     if (process_audio && audio_index >= 0) {
+        media->audio_output_rate = 48000;
         AVCodecParameters *parameters =
             format->streams[audio_index]->codecpar;
         const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
@@ -637,16 +700,39 @@ int media_init(Media *media, AVFormatContext *format,
 
         if (media->audio_decoder) {
             SDL_AudioSpec wanted = {0};
-            SDL_AudioSpec obtained;
+            SDL_AudioSpec obtained = {0};
             wanted.freq = 48000;
             wanted.format = AUDIO_S16SYS;
             wanted.channels = 2;
+#ifdef __SWITCH2__
+            wanted.samples = 1024;
+#else
             wanted.samples = 256;
+#endif
             wanted.callback = NULL;
             media->audio_device =
-                SDL_OpenAudioDevice(NULL, 0, &wanted, &obtained, 0);
-            if (media->audio_device)
+                SDL_OpenAudioDevice(
+                    NULL, 0, &wanted, &obtained,
+                    SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+            if (media->audio_device) {
+                if (obtained.freq > 0)
+                    media->audio_output_rate = obtained.freq;
                 SDL_PauseAudioDevice(media->audio_device, 1);
+#ifdef DEBUG
+                debug_log(
+                    "SDL audio device: requested_freq=%d obtained_freq=%d format=%u channels=%u samples=%u\n",
+                    wanted.freq, obtained.freq, (unsigned)obtained.format,
+                    (unsigned)obtained.channels,
+                    (unsigned)obtained.samples);
+                debug_log("SDL audio driver: %s\n",
+                          SDL_GetCurrentAudioDriver()
+                              ? SDL_GetCurrentAudioDriver()
+                              : "unknown");
+#endif
+            } else {
+                fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n",
+                        SDL_GetError());
+            }
 
             AVChannelLayout out_layout;
             av_channel_layout_default(&out_layout, 2);
@@ -654,7 +740,7 @@ int media_init(Media *media, AVFormatContext *format,
                 &media->swr,
                 &out_layout,
                 AV_SAMPLE_FMT_S16,
-                48000,
+                media->audio_output_rate,
                 &media->audio_decoder->ch_layout,
                 media->audio_decoder->sample_fmt,
                 media->audio_decoder->sample_rate,
@@ -929,27 +1015,6 @@ static int switch2_decode_packet(Media *media, AVPacket *packet,
             }
         }
         if (nv12_data[0] && nv12_data[1]) {
-#ifdef DEBUG
-            uint32_t y_hash = 2166136261u;
-            uint32_t uv_hash = 2166136261u;
-            size_t y_probe = frame.width * frame.height < 4096
-                ? (size_t)frame.width * frame.height : 4096;
-            size_t uv_probe = frame.width * frame.height / 2 < 2048
-                ? frame.width * frame.height / 2 : 2048;
-            for (size_t i = 0; i < y_probe; i++)
-                y_hash = (y_hash ^ nv12_data[0][i]) * 16777619u;
-            for (size_t i = 0; i < uv_probe; i++)
-                uv_hash = (uv_hash ^ nv12_data[1][i]) * 16777619u;
-            debug_log(
-                "Switch 2 NV12 planes: y_pitch=%d uv_pitch=%d y_hash=%08x uv_hash=%08x y_ptr=%p uv_ptr=%p\n",
-                nv12_linesizes[0],
-                nv12_linesizes[1],
-                (unsigned)y_hash,
-                (unsigned)uv_hash,
-                (void *)nv12_data[0],
-                (void *)nv12_data[1]
-            );
-#endif
             sws_freeContext(media->sws);
             media->sws = sws_getContext(
                 frame.width, frame.height,
