@@ -71,6 +71,15 @@ if(WIN32)
         avutil
         swscale
         swresample
+        mf
+        mfplat
+        mfuuid
+        mfreadwrite
+        secur32
+        bcrypt
+        shlwapi
+        strmiids
+        ws2_32
     )
 else()
     target_link_libraries(sdp-player-core PUBLIC
