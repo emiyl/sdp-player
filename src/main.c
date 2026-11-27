@@ -18,8 +18,6 @@ static int switch_pad_initialized;
 
 static int quit_requested(void)
 {
-    static Uint32 held_since = 0;
-
     if (!switch_pad_initialized) {
         (void)hidInitialize();
         u32 style_set =
@@ -33,23 +31,7 @@ static int quit_requested(void)
 
     padUpdate(&switch_pad);
     u64 buttons = padGetButtons(&switch_pad);
-    u64 quit_buttons =
-        HidNpadButton_Plus |
-        HidNpadButton_Minus;
-
-    int quit_buttons_pressed =
-        (buttons & quit_buttons) == quit_buttons;
-
-    if (quit_buttons_pressed) {
-        Uint32 now = SDL_GetTicks();
-        if (!held_since)
-            held_since = now;
-        if (now - held_since >= 2000)
-            return 1;
-    } else {
-        held_since = 0;
-    }
-    return 0;
+    return (buttons & HidNpadButton_Plus) != 0;
 }
 #else
 static int quit_requested(void)
